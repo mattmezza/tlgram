@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ type Model struct {
 	input     textinput.Model
 
 	// Telegram client (nil in demo mode)
-	telegram *telegram.Client
+	telegramClient *telegram.Client
 
 	// Chat state
 	chats       []*Chat
@@ -63,6 +64,9 @@ type Model struct {
 
 	// Reply state
 	replyingTo *Message
+
+	// Error state
+	lastError string
 }
 
 // Chat represents a chat in the list
@@ -107,6 +111,13 @@ func New(cfg *config.Config, targetChat string) Model {
 		messages:   make([]*Message, 0),
 	}
 
+	// Set up auth callbacks
+	m.authView.SetCallbacks(
+		m.handlePhoneSubmit,
+		m.handleCodeSubmit,
+		m.handlePasswordSubmit,
+	)
+
 	// In demo mode, start with chat view directly
 	if demoMode {
 		m.currentView = ViewChat
@@ -117,6 +128,46 @@ func New(cfg *config.Config, targetChat string) Model {
 	}
 
 	return m
+}
+
+// Auth callbacks
+func (m *Model) handlePhoneSubmit(phone string) tea.Cmd {
+	return func() tea.Msg {
+		if m.telegramClient == nil {
+			return authErrorMsg{err: fmt.Errorf("client not initialized")}
+		}
+		err := m.telegramClient.SendPhoneNumber(phone)
+		if err != nil {
+			return authErrorMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func (m *Model) handleCodeSubmit(code string) tea.Cmd {
+	return func() tea.Msg {
+		if m.telegramClient == nil {
+			return authErrorMsg{err: fmt.Errorf("client not initialized")}
+		}
+		err := m.telegramClient.SendAuthCode(code)
+		if err != nil {
+			return authErrorMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func (m *Model) handlePasswordSubmit(password string) tea.Cmd {
+	return func() tea.Msg {
+		if m.telegramClient == nil {
+			return authErrorMsg{err: fmt.Errorf("client not initialized")}
+		}
+		err := m.telegramClient.Send2FAPassword(password)
+		if err != nil {
+			return authErrorMsg{err: err}
+		}
+		return nil
+	}
 }
 
 // loadDemoData loads sample data for demo mode
@@ -148,7 +199,7 @@ func (m *Model) loadDemoData() {
 	if m.currentChat != nil {
 		m.statusBar.SetChatName(m.currentChat.Name)
 		m.messages = []*Message{
-			{ID: 1, Sender: "john_doe", Text: "Hey! 👋", IsOwn: false, Time: time.Now().Add(-10 * time.Minute)},
+			{ID: 1, Sender: "john_doe", Text: "Hey!", IsOwn: false, Time: time.Now().Add(-10 * time.Minute)},
 			{ID: 2, Sender: "You", Text: "Hi John! What's up?", IsOwn: true, Time: time.Now().Add(-9 * time.Minute)},
 			{ID: 3, Sender: "john_doe", Text: "Working on the new feature. Have you seen the latest PR?", IsOwn: false, Time: time.Now().Add(-8 * time.Minute)},
 			{ID: 4, Sender: "You", Text: "Not yet, I'll check it out now", IsOwn: true, Time: time.Now().Add(-7 * time.Minute)},
@@ -162,12 +213,82 @@ func (m *Model) loadDemoData() {
 	}
 }
 
+// Message types
+type authErrorMsg struct {
+	err error
+}
+
+type telegramUpdateMsg struct {
+	update telegram.Update
+}
+
+type chatsLoadedMsg struct {
+	chats []*Chat
+}
+
+type messagesLoadedMsg struct {
+	messages []*Message
+}
+
+type messageSentMsg struct {
+	message *Message
+}
+
+type clientStartedMsg struct{}
+
+type clientErrorMsg struct {
+	err error
+}
+
 // Init implements tea.Model
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		tea.SetWindowTitle("tlgram"),
 		textinput.Blink,
-	)
+	}
+
+	// If not in demo mode, start the Telegram client
+	if !m.demoMode {
+		cmds = append(cmds, m.startTelegramClient())
+	}
+
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) startTelegramClient() tea.Cmd {
+	return func() tea.Msg {
+		cfg := telegram.DefaultClientConfig(m.config.ConfigDir)
+		cfg.APIID = m.config.Telegram.APIID
+		cfg.APIHash = m.config.Telegram.APIHash
+		cfg.SessionDir = filepath.Join(m.config.ConfigDir, "session")
+
+		client, err := telegram.NewClient(cfg)
+		if err != nil {
+			return clientErrorMsg{err: err}
+		}
+
+		m.telegramClient = client
+
+		if err := client.Start(); err != nil {
+			return clientErrorMsg{err: err}
+		}
+
+		return clientStartedMsg{}
+	}
+}
+
+func (m Model) listenForUpdates() tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		update, ok := <-m.telegramClient.Updates()
+		if !ok {
+			return nil
+		}
+		return telegramUpdateMsg{update: update}
+	}
 }
 
 // Update implements tea.Model
@@ -186,6 +307,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
+	case clientStartedMsg:
+		// Client started, start listening for updates
+		return m, m.listenForUpdates()
+
+	case clientErrorMsg:
+		m.lastError = msg.err.Error()
+		m.authView.SetError(msg.err.Error())
+		return m, nil
+
+	case authErrorMsg:
+		m.authView.SetError(msg.err.Error())
+		m.authView.SetLoading(false)
+		return m, nil
+
+	case telegramUpdateMsg:
+		newModel, cmd := m.handleTelegramUpdate(msg.update)
+		// Continue listening for more updates
+		cmds = append(cmds, cmd, m.listenForUpdates())
+		return newModel, tea.Batch(cmds...)
+
+	case chatsLoadedMsg:
+		m.chats = msg.chats
+		if len(m.chats) > 0 {
+			m.currentChat = m.chats[0]
+			m.statusBar.SetChatName(m.currentChat.Name)
+		}
+		return m, nil
+
+	case messagesLoadedMsg:
+		m.messages = msg.messages
+		if len(m.messages) > 0 {
+			m.selectedIdx = len(m.messages) - 1
+		}
+		return m, nil
+
 	case statusbar.ClearNotificationMsg:
 		m.statusBar, _ = m.statusBar.Update(msg)
 		return m, nil
@@ -201,12 +357,164 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
+	switch u := update.(type) {
+	case telegram.AuthStateUpdate:
+		return m.handleAuthStateUpdate(u)
+
+	case telegram.ConnectionStateUpdate:
+		m.statusBar.SetConnectionState(u.State)
+		return m, nil
+
+	case telegram.NewMessageUpdate:
+		// Convert and add new message if it's for the current chat
+		if m.currentChat != nil && u.Message.ChatID == m.currentChat.ID {
+			msg := convertTelegramMessage(u.Message)
+			m.messages = append(m.messages, msg)
+			// Auto-scroll if at bottom
+			if m.selectedIdx >= len(m.messages)-2 {
+				m.selectedIdx = len(m.messages) - 1
+			}
+		}
+		return m, nil
+
+	case telegram.ChatUpdate:
+		// Update chat in list
+		chat := convertTelegramChat(u.Chat)
+		found := false
+		for i, c := range m.chats {
+			if c.ID == chat.ID {
+				m.chats[i] = chat
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.chats = append(m.chats, chat)
+		}
+		return m, nil
+
+	case telegram.ChatReadUpdate:
+		// Update unread count
+		for i, c := range m.chats {
+			if c.ID == u.ChatID {
+				m.chats[i].UnreadCount = 0
+				break
+			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) handleAuthStateUpdate(u telegram.AuthStateUpdate) (Model, tea.Cmd) {
+	switch u.State {
+	case telegram.AuthStateWaitPhoneNumber:
+		m.authView.SetState(telegram.AuthStateWaitPhoneNumber)
+
+	case telegram.AuthStateWaitCode:
+		m.authView.SetState(telegram.AuthStateWaitCode)
+
+	case telegram.AuthStateWaitPassword:
+		m.authView.SetState(telegram.AuthStateWaitPassword)
+
+	case telegram.AuthStateReady:
+		// Authentication complete, load chats
+		m.currentView = ViewChatList
+		m.statusBar.SetConnectionState(telegram.ConnectionStateReady)
+		return m, m.loadChats()
+	}
+
+	return m, nil
+}
+
+func (m Model) loadChats() tea.Cmd {
+	return func() tea.Msg {
+		if m.telegramClient == nil {
+			return nil
+		}
+
+		chats, err := m.telegramClient.GetChats(100)
+		if err != nil {
+			return clientErrorMsg{err: err}
+		}
+
+		result := make([]*Chat, len(chats))
+		for i, c := range chats {
+			result[i] = convertTelegramChat(c)
+		}
+
+		return chatsLoadedMsg{chats: result}
+	}
+}
+
+func (m Model) loadMessages(chatID int64) tea.Cmd {
+	return func() tea.Msg {
+		if m.telegramClient == nil {
+			return nil
+		}
+
+		messages, err := m.telegramClient.GetChatHistory(chatID, 0, 50)
+		if err != nil {
+			return clientErrorMsg{err: err}
+		}
+
+		result := make([]*Message, len(messages))
+		for i, msg := range messages {
+			result[i] = convertTelegramMessage(msg)
+		}
+
+		return messagesLoadedMsg{messages: result}
+	}
+}
+
+func convertTelegramChat(c *telegram.Chat) *Chat {
+	name := c.Title
+	if c.Username != "" {
+		name = "@" + c.Username
+	}
+
+	lastMsg := ""
+	var lastTime time.Time
+	if c.LastMessage != nil {
+		lastMsg = c.LastMessage.Text
+		lastTime = c.LastMessage.Date
+	}
+
+	return &Chat{
+		ID:          c.ID,
+		Name:        name,
+		UnreadCount: c.UnreadCount,
+		LastMessage: lastMsg,
+		LastTime:    lastTime,
+	}
+}
+
+func convertTelegramMessage(m *telegram.Message) *Message {
+	sender := m.SenderName
+	if m.IsOutgoing {
+		sender = "You"
+	}
+
+	return &Message{
+		ID:     m.ID,
+		Sender: sender,
+		Text:   m.Text,
+		IsOwn:  m.IsOutgoing,
+		Time:   m.Date,
+	}
+}
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	// Global quit with Ctrl+C
 	if key == "ctrl+c" {
 		m.quitting = true
+		if m.telegramClient != nil {
+			_ = m.telegramClient.Close()
+		}
 		return m, tea.Quit
 	}
 
@@ -230,6 +538,9 @@ func (m Model) handleAuthKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key == "q" {
 		m.quitting = true
+		if m.telegramClient != nil {
+			_ = m.telegramClient.Close()
+		}
 		return m, tea.Quit
 	}
 
@@ -256,6 +567,9 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch result.Action {
 	case keybind.ActionQuit:
 		m.quitting = true
+		if m.telegramClient != nil {
+			_ = m.telegramClient.Close()
+		}
 		return m, tea.Quit
 
 	case keybind.ActionMoveDown:
@@ -285,7 +599,12 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentChat = m.chats[m.chatIdx]
 			m.currentView = ViewChat
 			m.statusBar.SetChatName(m.currentChat.Name)
-			m.loadDemoData() // Load messages for selected chat
+
+			if m.demoMode {
+				m.loadDemoData()
+				return m, nil
+			}
+			return m, m.loadMessages(m.currentChat.ID)
 		}
 
 	case keybind.ActionOpenSwitcher:
@@ -310,6 +629,9 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch result.Action {
 	case keybind.ActionQuit:
 		m.quitting = true
+		if m.telegramClient != nil {
+			_ = m.telegramClient.Close()
+		}
 		return m, tea.Quit
 
 	case keybind.ActionMoveDown:
@@ -410,31 +732,20 @@ func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd)
 	return m, cmd
 }
 
-type messageSentMsg struct {
-	message *Message
-}
-
 func (m Model) sendMessage() (Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return m, nil
 	}
 
-	// Create new message
-	newMsg := &Message{
-		ID:     int64(len(m.messages) + 1),
-		Sender: "You",
-		Text:   text,
-		IsOwn:  true,
-		Time:   time.Now(),
-	}
-
+	var replyToID int64
 	if m.replyingTo != nil {
-		newMsg.ReplyToMsg = m.replyingTo
+		replyToID = m.replyingTo.ID
 	}
 
 	// Clear input and reply state
 	m.input.Reset()
+	replyingTo := m.replyingTo
 	m.replyingTo = nil
 
 	// Return to normal mode
@@ -442,9 +753,35 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 	m.statusBar.SetMode(keybind.ModeNormal)
 	m.input.Blur()
 
-	// Send message (in demo mode, just add to list)
+	// Send message
+	if m.demoMode {
+		// Demo mode: just add to list
+		newMsg := &Message{
+			ID:     int64(len(m.messages) + 1),
+			Sender: "You",
+			Text:   text,
+			IsOwn:  true,
+			Time:   time.Now(),
+		}
+		if replyingTo != nil {
+			newMsg.ReplyToMsg = replyingTo
+		}
+		return m, func() tea.Msg {
+			return messageSentMsg{message: newMsg}
+		}
+	}
+
+	// Real mode: send via client
+	chatID := m.currentChat.ID
 	return m, func() tea.Msg {
-		return messageSentMsg{message: newMsg}
+		if m.telegramClient == nil {
+			return nil
+		}
+		sent, err := m.telegramClient.SendMessage(chatID, text, replyToID)
+		if err != nil {
+			return clientErrorMsg{err: err}
+		}
+		return messageSentMsg{message: convertTelegramMessage(sent)}
 	}
 }
 
@@ -462,7 +799,12 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentChat = m.chats[m.chatIdx]
 			m.currentView = ViewChat
 			m.statusBar.SetChatName(m.currentChat.Name)
-			m.loadDemoData()
+
+			if m.demoMode {
+				m.loadDemoData()
+				return m, nil
+			}
+			return m, m.loadMessages(m.currentChat.ID)
 		}
 		return m, nil
 

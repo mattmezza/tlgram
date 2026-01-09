@@ -30,7 +30,7 @@ func DefaultClientConfig(configDir string) ClientConfig {
 		FilesDir:        filepath.Join(configDir, "files"),
 		DatabaseDir:     filepath.Join(configDir, "database"),
 		LogFile:         filepath.Join(configDir, "logs", "tdlib.log"),
-		LogVerbosity:    2,
+		LogVerbosity:    1,
 		UseTestDC:       false,
 		UseFileDatabase: true,
 		UseChatInfo:     true,
@@ -47,11 +47,29 @@ type Client struct {
 	connState ConnectionState
 	chats     map[int64]*Chat
 	users     map[int64]*User
+	me        *User
 	mu        sync.RWMutex
 	closed    bool
 
-	// Will hold actual TDLib client when integrated
-	// tdlib *client.Client
+	// TDLib client (platform-specific implementation)
+	impl clientImpl
+}
+
+// clientImpl is the interface for the platform-specific TDLib implementation
+type clientImpl interface {
+	start() error
+	close() error
+	sendPhoneNumber(phone string) error
+	sendAuthCode(code string) error
+	send2FAPassword(password string) error
+	getChats(limit int) ([]*Chat, error)
+	getChat(chatID int64) (*Chat, error)
+	searchPublicChat(username string) (*Chat, error)
+	getChatHistory(chatID int64, fromMessageID int64, limit int) ([]*Message, error)
+	sendMessage(chatID int64, text string, replyToID int64) (*Message, error)
+	markAsRead(chatID int64, messageIDs []int64) error
+	downloadFile(fileID string, priority int) error
+	cancelDownload(fileID string) error
 }
 
 // NewClient creates a new Telegram client
@@ -81,17 +99,19 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		users:     make(map[int64]*User),
 	}
 
+	// Create platform-specific implementation
+	impl, err := newClientImpl(c)
+	if err != nil {
+		return nil, err
+	}
+	c.impl = impl
+
 	return c, nil
 }
 
 // Start initializes the TDLib client and starts processing updates
 func (c *Client) Start() error {
-	// TODO: Initialize TDLib client
-	// This will be implemented when TDLib is integrated
-
-	// For now, transition to waiting for phone number
-	c.setAuthState(AuthStateWaitPhoneNumber)
-	return nil
+	return c.impl.start()
 }
 
 // Updates returns the channel for receiving updates
@@ -113,46 +133,31 @@ func (c *Client) ConnectionState() ConnectionState {
 	return c.connState
 }
 
+// Me returns the current user
+func (c *Client) Me() *User {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.me
+}
+
 // SendPhoneNumber sends the phone number for authentication
 func (c *Client) SendPhoneNumber(phone string) error {
-	// TODO: Implement with TDLib
-	// For now, simulate transition to code waiting
-	c.setAuthState(AuthStateWaitCode)
-	return nil
+	return c.impl.sendPhoneNumber(phone)
 }
 
 // SendAuthCode sends the authentication code
 func (c *Client) SendAuthCode(code string) error {
-	// TODO: Implement with TDLib
-	// For now, simulate transition to ready (or 2FA if needed)
-	c.setAuthState(AuthStateReady)
-	c.setConnectionState(ConnectionStateReady)
-	return nil
+	return c.impl.sendAuthCode(code)
 }
 
 // Send2FAPassword sends the two-factor authentication password
 func (c *Client) Send2FAPassword(password string) error {
-	// TODO: Implement with TDLib
-	c.setAuthState(AuthStateReady)
-	c.setConnectionState(ConnectionStateReady)
-	return nil
+	return c.impl.send2FAPassword(password)
 }
 
 // GetChats returns the list of chats
 func (c *Client) GetChats(limit int) ([]*Chat, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	// TODO: Implement with TDLib
-	// For now, return cached chats
-	chats := make([]*Chat, 0, len(c.chats))
-	for _, chat := range c.chats {
-		chats = append(chats, chat)
-		if len(chats) >= limit {
-			break
-		}
-	}
-	return chats, nil
+	return c.impl.getChats(limit)
 }
 
 // GetChat returns a chat by ID
@@ -165,44 +170,37 @@ func (c *Client) GetChat(chatID int64) (*Chat, error) {
 		return chat, nil
 	}
 
-	// TODO: Fetch from TDLib
-	return nil, fmt.Errorf("chat not found: %d", chatID)
+	return c.impl.getChat(chatID)
 }
 
 // SearchPublicChat searches for a public chat by username
 func (c *Client) SearchPublicChat(username string) (*Chat, error) {
-	// TODO: Implement with TDLib
-	return nil, fmt.Errorf("not implemented")
+	return c.impl.searchPublicChat(username)
 }
 
 // GetChatHistory returns messages from a chat
 func (c *Client) GetChatHistory(chatID int64, fromMessageID int64, limit int) ([]*Message, error) {
-	// TODO: Implement with TDLib
-	return nil, nil
+	return c.impl.getChatHistory(chatID, fromMessageID, limit)
 }
 
 // SendMessage sends a text message to a chat
 func (c *Client) SendMessage(chatID int64, text string, replyToID int64) (*Message, error) {
-	// TODO: Implement with TDLib
-	return nil, fmt.Errorf("not implemented")
+	return c.impl.sendMessage(chatID, text, replyToID)
 }
 
 // MarkAsRead marks messages as read
 func (c *Client) MarkAsRead(chatID int64, messageIDs []int64) error {
-	// TODO: Implement with TDLib
-	return nil
+	return c.impl.markAsRead(chatID, messageIDs)
 }
 
 // DownloadFile downloads a file
 func (c *Client) DownloadFile(fileID string, priority int) error {
-	// TODO: Implement with TDLib
-	return fmt.Errorf("not implemented")
+	return c.impl.downloadFile(fileID, priority)
 }
 
 // CancelDownload cancels a file download
 func (c *Client) CancelDownload(fileID string) error {
-	// TODO: Implement with TDLib
-	return nil
+	return c.impl.cancelDownload(fileID)
 }
 
 // Close closes the client
@@ -215,12 +213,15 @@ func (c *Client) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 
-	// TODO: Close TDLib client
+	if c.impl != nil {
+		_ = c.impl.close()
+	}
+
 	close(c.updates)
 	return nil
 }
 
-// Internal methods
+// Internal methods used by implementations
 
 func (c *Client) setAuthState(state AuthState) {
 	c.mu.Lock()
@@ -261,5 +262,11 @@ func (c *Client) cacheChat(chat *Chat) {
 func (c *Client) cacheUser(user *User) {
 	c.mu.Lock()
 	c.users[user.ID] = user
+	c.mu.Unlock()
+}
+
+func (c *Client) setMe(user *User) {
+	c.mu.Lock()
+	c.me = user
 	c.mu.Unlock()
 }
