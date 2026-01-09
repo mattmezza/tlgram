@@ -1,14 +1,56 @@
 .claude
 .tmux-session
 
+# Binaries
+bin/
+tlgram
+tlgram-*
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-*.test
-*.out
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Test binary
+*.test
+
+# Coverage
+*.out
+coverage.html
+
+# Dependency directories
+vendor/
 go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+
+# TDLib build output
+tdlib-out/
+
+# Local development
+.envrc
+.env
+.env.local
+
+# Session data (never commit)
+session/
+
+# Logs
+*.log
+logs/
+
+# Config with secrets (the template is ok)
+config.toml
+!config.example.toml
