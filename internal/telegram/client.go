@@ -1,94 +1,78 @@
 package telegram
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"github.com/gotd/td/session"
+	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/auth"
+	"github.com/gotd/td/telegram/updates"
+	"github.com/gotd/td/tg"
 )
 
 // ClientConfig holds configuration for the Telegram client
 type ClientConfig struct {
-	APIID           int32
-	APIHash         string
-	SessionDir      string
-	FilesDir        string
-	DatabaseDir     string
-	LogFile         string
-	LogVerbosity    int
-	UseTestDC       bool
-	UseFileDatabase bool
-	UseChatInfo     bool
-	UseMessageDB    bool
-	UseSecretChats  bool
+	APIID        int
+	APIHash      string
+	SessionDir   string
+	Phone        string
+	DeviceModel  string
+	SystemVer    string
+	AppVersion   string
+	LangCode     string
 }
 
 // DefaultClientConfig returns default client configuration
 func DefaultClientConfig(configDir string) ClientConfig {
 	return ClientConfig{
-		SessionDir:      filepath.Join(configDir, "session"),
-		FilesDir:        filepath.Join(configDir, "files"),
-		DatabaseDir:     filepath.Join(configDir, "database"),
-		LogFile:         filepath.Join(configDir, "logs", "tdlib.log"),
-		LogVerbosity:    1,
-		UseTestDC:       false,
-		UseFileDatabase: true,
-		UseChatInfo:     true,
-		UseMessageDB:    true,
-		UseSecretChats:  false,
+		SessionDir:  filepath.Join(configDir, "session"),
+		DeviceModel: "Desktop",
+		SystemVer:   "Linux",
+		AppVersion:  "0.1.0",
+		LangCode:    "en",
 	}
 }
 
-// Client wraps the TDLib client
+// Client wraps the Telegram client
 type Client struct {
-	config    ClientConfig
-	updates   chan Update
-	authState AuthState
-	connState ConnectionState
-	chats     map[int64]*Chat
-	users     map[int64]*User
-	me        *User
-	mu        sync.RWMutex
-	closed    bool
+	config      ClientConfig
+	updates     chan Update
+	authState   AuthState
+	connState   ConnectionState
+	chats       map[int64]*Chat
+	users       map[int64]*User
+	me          *User
+	mu          sync.RWMutex
+	closed      bool
 
-	// TDLib client (platform-specific implementation)
-	impl clientImpl
-}
+	// gotd client
+	client     *telegram.Client
+	api        *tg.Client
+	dispatcher *updates.Manager
+	ctx        context.Context
+	cancel     context.CancelFunc
 
-// clientImpl is the interface for the platform-specific TDLib implementation
-type clientImpl interface {
-	start() error
-	close() error
-	sendPhoneNumber(phone string) error
-	sendAuthCode(code string) error
-	send2FAPassword(password string) error
-	getChats(limit int) ([]*Chat, error)
-	getChat(chatID int64) (*Chat, error)
-	searchPublicChat(username string) (*Chat, error)
-	getChatHistory(chatID int64, fromMessageID int64, limit int) ([]*Message, error)
-	sendMessage(chatID int64, text string, replyToID int64) (*Message, error)
-	markAsRead(chatID int64, messageIDs []int64) error
-	downloadFile(fileID string, priority int) error
-	cancelDownload(fileID string) error
+	// Auth flow state
+	phoneCode     chan string
+	password      chan string
+	authErr       chan error
+	pendingPhone  string
 }
 
 // NewClient creates a new Telegram client
 func NewClient(cfg ClientConfig) (*Client, error) {
-	// Ensure directories exist with proper permissions
-	dirs := []string{cfg.SessionDir, cfg.FilesDir, cfg.DatabaseDir}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
-		}
+	// Ensure session directory exists
+	if err := os.MkdirAll(cfg.SessionDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create session directory: %w", err)
 	}
 
-	// Create log directory
-	if cfg.LogFile != "" {
-		logDir := filepath.Dir(cfg.LogFile)
-		if err := os.MkdirAll(logDir, 0700); err != nil {
-			return nil, fmt.Errorf("failed to create log directory: %w", err)
-		}
-	}
+	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Client{
 		config:    cfg,
@@ -97,21 +81,324 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		connState: ConnectionStateUnknown,
 		chats:     make(map[int64]*Chat),
 		users:     make(map[int64]*User),
+		ctx:       ctx,
+		cancel:    cancel,
+		phoneCode: make(chan string, 1),
+		password:  make(chan string, 1),
+		authErr:   make(chan error, 1),
 	}
-
-	// Create platform-specific implementation
-	impl, err := newClientImpl(c)
-	if err != nil {
-		return nil, err
-	}
-	c.impl = impl
 
 	return c, nil
 }
 
-// Start initializes the TDLib client and starts processing updates
+// Start initializes the client and begins connection
 func (c *Client) Start() error {
-	return c.impl.start()
+	// Create session storage
+	sessionPath := filepath.Join(c.config.SessionDir, "session.json")
+	sessionStorage := &session.FileStorage{
+		Path: sessionPath,
+	}
+
+	// Create update dispatcher
+	c.dispatcher = updates.New(updates.Config{
+		Handler: c,
+	})
+
+	// Create client options
+	opts := telegram.Options{
+		SessionStorage: sessionStorage,
+		UpdateHandler:  c.dispatcher,
+		Device: telegram.DeviceConfig{
+			DeviceModel:    c.config.DeviceModel,
+			SystemVersion:  c.config.SystemVer,
+			AppVersion:     c.config.AppVersion,
+			LangCode:       c.config.LangCode,
+			SystemLangCode: c.config.LangCode,
+		},
+	}
+
+	// Create the client
+	c.client = telegram.NewClient(c.config.APIID, c.config.APIHash, opts)
+
+	// Start the client in background
+	go c.run()
+
+	return nil
+}
+
+func (c *Client) run() {
+	c.setConnectionState(ConnectionStateConnecting)
+
+	err := c.client.Run(c.ctx, func(ctx context.Context) error {
+		c.api = c.client.API()
+		c.setConnectionState(ConnectionStateReady)
+
+		// Check if already authorized
+		status, err := c.client.Auth().Status(ctx)
+		if err != nil {
+			return err
+		}
+
+		if !status.Authorized {
+			c.setAuthState(AuthStateWaitPhoneNumber)
+			// Wait for auth to complete
+			if err := c.handleAuth(ctx); err != nil {
+				return err
+			}
+		} else {
+			c.setAuthState(AuthStateReady)
+			// Load initial data
+			if err := c.loadInitialData(ctx); err != nil {
+				c.sendUpdate(ErrorUpdate{Message: err.Error()})
+			}
+		}
+
+		// Keep running until context is cancelled
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	if err != nil && err != context.Canceled {
+		c.sendUpdate(ErrorUpdate{Message: err.Error()})
+	}
+}
+
+func (c *Client) handleAuth(ctx context.Context) error {
+	flow := auth.NewFlow(
+		&authFlow{client: c},
+		auth.SendCodeOptions{},
+	)
+
+	if err := c.client.Auth().IfNecessary(ctx, flow); err != nil {
+		return err
+	}
+
+	c.setAuthState(AuthStateReady)
+
+	// Load initial data after auth
+	if err := c.loadInitialData(ctx); err != nil {
+		c.sendUpdate(ErrorUpdate{Message: err.Error()})
+	}
+
+	return nil
+}
+
+// authFlow implements auth.UserAuthenticator
+type authFlow struct {
+	client *Client
+}
+
+func (a *authFlow) Phone(ctx context.Context) (string, error) {
+	// Return the pending phone if set
+	if a.client.pendingPhone != "" {
+		phone := a.client.pendingPhone
+		a.client.pendingPhone = ""
+		return phone, nil
+	}
+	return "", fmt.Errorf("phone number not provided")
+}
+
+func (a *authFlow) Password(ctx context.Context) (string, error) {
+	a.client.setAuthState(AuthStateWaitPassword)
+	select {
+	case pwd := <-a.client.password:
+		return pwd, nil
+	case err := <-a.client.authErr:
+		return "", err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (a *authFlow) Code(ctx context.Context, sentCode *tg.AuthSentCode) (string, error) {
+	a.client.setAuthState(AuthStateWaitCode)
+	select {
+	case code := <-a.client.phoneCode:
+		return code, nil
+	case err := <-a.client.authErr:
+		return "", err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (a *authFlow) SignUp(ctx context.Context) (auth.UserInfo, error) {
+	return auth.UserInfo{}, fmt.Errorf("sign up not supported")
+}
+
+func (a *authFlow) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {
+	return nil
+}
+
+// Handle implements updates.Handler
+func (c *Client) Handle(ctx context.Context, u tg.UpdatesClass) error {
+	switch upd := u.(type) {
+	case *tg.Updates:
+		for _, update := range upd.Updates {
+			c.handleUpdate(ctx, update, upd.Users, upd.Chats)
+		}
+	case *tg.UpdatesCombined:
+		for _, update := range upd.Updates {
+			c.handleUpdate(ctx, update, upd.Users, upd.Chats)
+		}
+	case *tg.UpdateShort:
+		c.handleUpdate(ctx, upd.Update, nil, nil)
+	case *tg.UpdateShortMessage:
+		c.handleShortMessage(upd)
+	case *tg.UpdateShortChatMessage:
+		c.handleShortChatMessage(upd)
+	}
+	return nil
+}
+
+func (c *Client) handleUpdate(ctx context.Context, update tg.UpdateClass, users []tg.UserClass, chats []tg.ChatClass) {
+	// Cache users and chats
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok {
+			c.cacheUser(c.convertUser(user))
+		}
+	}
+	for _, ch := range chats {
+		c.cacheChat(c.convertChatClass(ch))
+	}
+
+	switch u := update.(type) {
+	case *tg.UpdateNewMessage:
+		if msg, ok := u.Message.(*tg.Message); ok {
+			c.sendUpdate(NewMessageUpdate{Message: c.convertMessage(msg)})
+		}
+
+	case *tg.UpdateNewChannelMessage:
+		if msg, ok := u.Message.(*tg.Message); ok {
+			c.sendUpdate(NewMessageUpdate{Message: c.convertMessage(msg)})
+		}
+
+	case *tg.UpdateEditMessage:
+		if msg, ok := u.Message.(*tg.Message); ok {
+			c.sendUpdate(MessageEditedUpdate{
+				ChatID:    c.getPeerID(msg.PeerID),
+				MessageID: int64(msg.ID),
+				NewText:   msg.Message,
+			})
+		}
+
+	case *tg.UpdateDeleteMessages:
+		ids := make([]int64, len(u.Messages))
+		for i, id := range u.Messages {
+			ids[i] = int64(id)
+		}
+		c.sendUpdate(MessageDeletedUpdate{MessageIDs: ids})
+
+	case *tg.UpdateReadHistoryInbox:
+		c.sendUpdate(ChatReadUpdate{
+			ChatID:        c.getPeerID(u.Peer),
+			LastReadInbox: int64(u.MaxID),
+		})
+
+	case *tg.UpdateUserTyping:
+		c.sendUpdate(TypingUpdate{
+			ChatID: int64(u.UserID),
+			UserID: int64(u.UserID),
+			Action: c.convertTypingAction(u.Action),
+		})
+
+	case *tg.UpdateChatUserTyping:
+		c.sendUpdate(TypingUpdate{
+			ChatID: int64(u.ChatID),
+			UserID: int64(u.FromID.(*tg.PeerUser).UserID),
+			Action: c.convertTypingAction(u.Action),
+		})
+	}
+}
+
+func (c *Client) handleShortMessage(u *tg.UpdateShortMessage) {
+	msg := &Message{
+		ID:         int64(u.ID),
+		ChatID:     int64(u.UserID),
+		SenderID:   int64(u.UserID),
+		Text:       u.Message,
+		Date:       time.Unix(int64(u.Date), 0),
+		IsOutgoing: u.Out,
+	}
+
+	// Get sender name from cache
+	c.mu.RLock()
+	if user, ok := c.users[int64(u.UserID)]; ok {
+		msg.SenderName = user.FullName()
+	}
+	c.mu.RUnlock()
+
+	if msg.SenderName == "" {
+		msg.SenderName = fmt.Sprintf("User %d", u.UserID)
+	}
+
+	c.sendUpdate(NewMessageUpdate{Message: msg})
+}
+
+func (c *Client) handleShortChatMessage(u *tg.UpdateShortChatMessage) {
+	msg := &Message{
+		ID:         int64(u.ID),
+		ChatID:     int64(u.ChatID),
+		SenderID:   int64(u.FromID),
+		Text:       u.Message,
+		Date:       time.Unix(int64(u.Date), 0),
+		IsOutgoing: u.Out,
+	}
+
+	// Get sender name from cache
+	c.mu.RLock()
+	if user, ok := c.users[int64(u.FromID)]; ok {
+		msg.SenderName = user.FullName()
+	}
+	c.mu.RUnlock()
+
+	if msg.SenderName == "" {
+		msg.SenderName = fmt.Sprintf("User %d", u.FromID)
+	}
+
+	c.sendUpdate(NewMessageUpdate{Message: msg})
+}
+
+func (c *Client) loadInitialData(ctx context.Context) error {
+	// Get current user
+	me, err := c.api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+	if err != nil {
+		return err
+	}
+	if len(me) > 0 {
+		if user, ok := me[0].(*tg.User); ok {
+			c.setMe(c.convertUser(user))
+		}
+	}
+
+	// Get dialogs (chats)
+	dialogs, err := c.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		OffsetPeer: &tg.InputPeerEmpty{},
+		Limit:      100,
+	})
+	if err != nil {
+		return err
+	}
+
+	switch d := dialogs.(type) {
+	case *tg.MessagesDialogs:
+		c.cacheDialogs(d.Users, d.Chats, d.Dialogs)
+	case *tg.MessagesDialogsSlice:
+		c.cacheDialogs(d.Users, d.Chats, d.Dialogs)
+	}
+
+	return nil
+}
+
+func (c *Client) cacheDialogs(users []tg.UserClass, chats []tg.ChatClass, dialogs []tg.DialogClass) {
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok {
+			c.cacheUser(c.convertUser(user))
+		}
+	}
+	for _, ch := range chats {
+		c.cacheChat(c.convertChatClass(ch))
+	}
 }
 
 // Updates returns the channel for receiving updates
@@ -140,24 +427,161 @@ func (c *Client) Me() *User {
 	return c.me
 }
 
-// SendPhoneNumber sends the phone number for authentication
+// SendPhoneNumber initiates authentication with the given phone number
 func (c *Client) SendPhoneNumber(phone string) error {
-	return c.impl.sendPhoneNumber(phone)
+	c.pendingPhone = phone
+
+	// Trigger auth flow
+	go func() {
+		ctx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
+		defer cancel()
+
+		_, err := c.api.AuthSendCode(ctx, &tg.AuthSendCodeRequest{
+			PhoneNumber: phone,
+			APIID:       c.config.APIID,
+			APIHash:     c.config.APIHash,
+			Settings:    tg.CodeSettings{},
+		})
+		if err != nil {
+			c.sendUpdate(ErrorUpdate{Message: err.Error()})
+			return
+		}
+		c.setAuthState(AuthStateWaitCode)
+	}()
+
+	return nil
 }
 
 // SendAuthCode sends the authentication code
 func (c *Client) SendAuthCode(code string) error {
-	return c.impl.sendAuthCode(code)
+	select {
+	case c.phoneCode <- code:
+		return nil
+	default:
+		// Channel full or not waiting for code
+		// Try direct sign in
+		go func() {
+			ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+			defer cancel()
+
+			result, err := c.api.AuthSignIn(ctx, &tg.AuthSignInRequest{
+				PhoneNumber:   c.pendingPhone,
+				PhoneCodeHash: "", // We need to store this
+				PhoneCode:     code,
+			})
+			if err != nil {
+				// Check if 2FA is required
+				if errors.Is(err, auth.ErrPasswordAuthNeeded) {
+					c.setAuthState(AuthStateWaitPassword)
+					return
+				}
+				c.sendUpdate(ErrorUpdate{Message: err.Error()})
+				return
+			}
+
+			if auth, ok := result.(*tg.AuthAuthorization); ok {
+				if user, ok := auth.User.(*tg.User); ok {
+					c.setMe(c.convertUser(user))
+				}
+				c.setAuthState(AuthStateReady)
+				c.loadInitialData(ctx)
+			}
+		}()
+		return nil
+	}
 }
 
 // Send2FAPassword sends the two-factor authentication password
-func (c *Client) Send2FAPassword(password string) error {
-	return c.impl.send2FAPassword(password)
+func (c *Client) Send2FAPassword(pwd string) error {
+	select {
+	case c.password <- pwd:
+		return nil
+	default:
+		return fmt.Errorf("not waiting for password")
+	}
 }
 
 // GetChats returns the list of chats
 func (c *Client) GetChats(limit int) ([]*Chat, error) {
-	return c.impl.getChats(limit)
+	if c.api == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	dialogs, err := c.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		OffsetPeer: &tg.InputPeerEmpty{},
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var chats []*Chat
+	switch d := dialogs.(type) {
+	case *tg.MessagesDialogs:
+		chats = c.extractChatsFromDialogs(d.Users, d.Chats, d.Dialogs)
+	case *tg.MessagesDialogsSlice:
+		chats = c.extractChatsFromDialogs(d.Users, d.Chats, d.Dialogs)
+	}
+
+	return chats, nil
+}
+
+func (c *Client) extractChatsFromDialogs(users []tg.UserClass, chats []tg.ChatClass, dialogs []tg.DialogClass) []*Chat {
+	// Build lookup maps
+	userMap := make(map[int64]*tg.User)
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok {
+			userMap[user.ID] = user
+			c.cacheUser(c.convertUser(user))
+		}
+	}
+
+	chatMap := make(map[int64]tg.ChatClass)
+	for _, ch := range chats {
+		switch chat := ch.(type) {
+		case *tg.Chat:
+			chatMap[chat.ID] = ch
+		case *tg.Channel:
+			chatMap[chat.ID] = ch
+		}
+	}
+
+	var result []*Chat
+	for _, d := range dialogs {
+		dialog, ok := d.(*tg.Dialog)
+		if !ok {
+			continue
+		}
+
+		var chat *Chat
+		switch peer := dialog.Peer.(type) {
+		case *tg.PeerUser:
+			if user, ok := userMap[peer.UserID]; ok {
+				chat = c.convertUserToChat(user)
+				chat.UnreadCount = dialog.UnreadCount
+			}
+		case *tg.PeerChat:
+			if ch, ok := chatMap[peer.ChatID]; ok {
+				chat = c.convertChatClass(ch)
+				chat.UnreadCount = dialog.UnreadCount
+			}
+		case *tg.PeerChannel:
+			if ch, ok := chatMap[peer.ChannelID]; ok {
+				chat = c.convertChatClass(ch)
+				chat.UnreadCount = dialog.UnreadCount
+			}
+		}
+
+		if chat != nil {
+			c.cacheChat(chat)
+			result = append(result, chat)
+		}
+	}
+
+	return result
 }
 
 // GetChat returns a chat by ID
@@ -170,37 +594,191 @@ func (c *Client) GetChat(chatID int64) (*Chat, error) {
 		return chat, nil
 	}
 
-	return c.impl.getChat(chatID)
+	return nil, fmt.Errorf("chat not found: %d", chatID)
 }
 
 // SearchPublicChat searches for a public chat by username
 func (c *Client) SearchPublicChat(username string) (*Chat, error) {
-	return c.impl.searchPublicChat(username)
+	if c.api == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	resolved, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
+		Username: username,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache users and chats
+	for _, u := range resolved.Users {
+		if user, ok := u.(*tg.User); ok {
+			c.cacheUser(c.convertUser(user))
+		}
+	}
+	for _, ch := range resolved.Chats {
+		c.cacheChat(c.convertChatClass(ch))
+	}
+
+	// Return the resolved peer
+	switch peer := resolved.Peer.(type) {
+	case *tg.PeerUser:
+		return c.GetChat(peer.UserID)
+	case *tg.PeerChat:
+		return c.GetChat(peer.ChatID)
+	case *tg.PeerChannel:
+		return c.GetChat(peer.ChannelID)
+	}
+
+	return nil, fmt.Errorf("could not resolve username: %s", username)
 }
 
 // GetChatHistory returns messages from a chat
 func (c *Client) GetChatHistory(chatID int64, fromMessageID int64, limit int) ([]*Message, error) {
-	return c.impl.getChatHistory(chatID, fromMessageID, limit)
+	if c.api == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	peer := c.getInputPeer(chatID)
+	if peer == nil {
+		return nil, fmt.Errorf("unknown chat: %d", chatID)
+	}
+
+	history, err := c.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:      peer,
+		OffsetID:  int(fromMessageID),
+		Limit:     limit,
+		AddOffset: 0,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var messages []*Message
+	switch h := history.(type) {
+	case *tg.MessagesMessages:
+		messages = c.extractMessages(h.Messages, h.Users)
+	case *tg.MessagesMessagesSlice:
+		messages = c.extractMessages(h.Messages, h.Users)
+	case *tg.MessagesChannelMessages:
+		messages = c.extractMessages(h.Messages, h.Users)
+	}
+
+	// Reverse to get chronological order
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
+}
+
+func (c *Client) extractMessages(msgs []tg.MessageClass, users []tg.UserClass) []*Message {
+	// Cache users
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok {
+			c.cacheUser(c.convertUser(user))
+		}
+	}
+
+	var result []*Message
+	for _, m := range msgs {
+		if msg, ok := m.(*tg.Message); ok {
+			result = append(result, c.convertMessage(msg))
+		}
+	}
+	return result
 }
 
 // SendMessage sends a text message to a chat
 func (c *Client) SendMessage(chatID int64, text string, replyToID int64) (*Message, error) {
-	return c.impl.sendMessage(chatID, text, replyToID)
+	if c.api == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	peer := c.getInputPeer(chatID)
+	if peer == nil {
+		return nil, fmt.Errorf("unknown chat: %d", chatID)
+	}
+
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     peer,
+		Message:  text,
+		RandomID: time.Now().UnixNano(),
+	}
+
+	if replyToID > 0 {
+		req.ReplyTo = &tg.InputReplyToMessage{
+			ReplyToMsgID: int(replyToID),
+		}
+	}
+
+	result, err := c.api.MessagesSendMessage(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract sent message info
+	switch r := result.(type) {
+	case *tg.UpdateShortSentMessage:
+		return &Message{
+			ID:         int64(r.ID),
+			ChatID:     chatID,
+			Text:       text,
+			Date:       time.Unix(int64(r.Date), 0),
+			IsOutgoing: true,
+			SenderName: "You",
+		}, nil
+	}
+
+	return &Message{
+		ID:         time.Now().UnixNano(),
+		ChatID:     chatID,
+		Text:       text,
+		Date:       time.Now(),
+		IsOutgoing: true,
+		SenderName: "You",
+	}, nil
 }
 
 // MarkAsRead marks messages as read
 func (c *Client) MarkAsRead(chatID int64, messageIDs []int64) error {
-	return c.impl.markAsRead(chatID, messageIDs)
+	if c.api == nil || len(messageIDs) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+	defer cancel()
+
+	peer := c.getInputPeer(chatID)
+	if peer == nil {
+		return nil
+	}
+
+	maxID := int(messageIDs[len(messageIDs)-1])
+	_, err := c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{
+		Peer:  peer,
+		MaxID: maxID,
+	})
+	return err
 }
 
-// DownloadFile downloads a file
+// DownloadFile downloads a file (not implemented yet)
 func (c *Client) DownloadFile(fileID string, priority int) error {
-	return c.impl.downloadFile(fileID, priority)
+	return fmt.Errorf("file download not implemented")
 }
 
 // CancelDownload cancels a file download
 func (c *Client) CancelDownload(fileID string) error {
-	return c.impl.cancelDownload(fileID)
+	return nil
 }
 
 // Close closes the client
@@ -213,21 +791,231 @@ func (c *Client) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 
-	if c.impl != nil {
-		_ = c.impl.close()
-	}
-
+	c.cancel()
 	close(c.updates)
 	return nil
 }
 
-// Internal methods used by implementations
+// Helper methods
+
+func (c *Client) getInputPeer(chatID int64) tg.InputPeerClass {
+	c.mu.RLock()
+	chat, ok := c.chats[chatID]
+	c.mu.RUnlock()
+
+	if !ok {
+		// Try as user
+		return &tg.InputPeerUser{UserID: chatID}
+	}
+
+	switch chat.Type {
+	case ChatTypePrivate:
+		return &tg.InputPeerUser{UserID: chatID}
+	case ChatTypeGroup:
+		return &tg.InputPeerChat{ChatID: chatID}
+	case ChatTypeSupergroup, ChatTypeChannel:
+		return &tg.InputPeerChannel{ChannelID: chatID}
+	default:
+		return &tg.InputPeerUser{UserID: chatID}
+	}
+}
+
+func (c *Client) getPeerID(peer tg.PeerClass) int64 {
+	switch p := peer.(type) {
+	case *tg.PeerUser:
+		return p.UserID
+	case *tg.PeerChat:
+		return p.ChatID
+	case *tg.PeerChannel:
+		return p.ChannelID
+	}
+	return 0
+}
+
+func (c *Client) convertMessage(msg *tg.Message) *Message {
+	m := &Message{
+		ID:         int64(msg.ID),
+		ChatID:     c.getPeerID(msg.PeerID),
+		Text:       msg.Message,
+		Date:       time.Unix(int64(msg.Date), 0),
+		IsOutgoing: msg.Out,
+		IsEdited:   msg.EditDate > 0,
+	}
+
+	// Get sender info
+	if msg.FromID != nil {
+		switch from := msg.FromID.(type) {
+		case *tg.PeerUser:
+			m.SenderID = from.UserID
+			c.mu.RLock()
+			if user, ok := c.users[from.UserID]; ok {
+				m.SenderName = user.FullName()
+			}
+			c.mu.RUnlock()
+		case *tg.PeerChat:
+			m.SenderID = from.ChatID
+		case *tg.PeerChannel:
+			m.SenderID = from.ChannelID
+		}
+	}
+
+	if m.SenderName == "" {
+		if m.IsOutgoing {
+			m.SenderName = "You"
+		} else {
+			m.SenderName = fmt.Sprintf("User %d", m.SenderID)
+		}
+	}
+
+	// Handle reply
+	if reply, ok := msg.ReplyTo.(*tg.MessageReplyHeader); ok {
+		m.ReplyToID = int64(reply.ReplyToMsgID)
+	}
+
+	// Handle media
+	if msg.Media != nil {
+		m.Media = c.convertMedia(msg.Media)
+		if m.Text == "" && m.Media != nil {
+			m.Text = fmt.Sprintf("[%s]", m.Media.Type)
+		}
+	}
+
+	return m
+}
+
+func (c *Client) convertMedia(media tg.MessageMediaClass) *MediaInfo {
+	switch m := media.(type) {
+	case *tg.MessageMediaPhoto:
+		return &MediaInfo{Type: MediaTypePhoto}
+	case *tg.MessageMediaDocument:
+		if doc, ok := m.Document.(*tg.Document); ok {
+			info := &MediaInfo{
+				Type:     MediaTypeDocument,
+				FileName: getDocumentFilename(doc),
+				FileSize: doc.Size,
+				MimeType: doc.MimeType,
+			}
+			// Determine specific type from attributes
+			for _, attr := range doc.Attributes {
+				switch attr.(type) {
+				case *tg.DocumentAttributeVideo:
+					info.Type = MediaTypeVideo
+				case *tg.DocumentAttributeAudio:
+					info.Type = MediaTypeAudio
+				case *tg.DocumentAttributeSticker:
+					info.Type = MediaTypeSticker
+				case *tg.DocumentAttributeAnimated:
+					info.Type = MediaTypeAnimation
+				}
+			}
+			return info
+		}
+	case *tg.MessageMediaGeo:
+		return &MediaInfo{Type: MediaTypeDocument}
+	case *tg.MessageMediaContact:
+		return &MediaInfo{Type: MediaTypeDocument}
+	}
+	return nil
+}
+
+func getDocumentFilename(doc *tg.Document) string {
+	for _, attr := range doc.Attributes {
+		if filename, ok := attr.(*tg.DocumentAttributeFilename); ok {
+			return filename.FileName
+		}
+	}
+	return ""
+}
+
+func (c *Client) convertUser(user *tg.User) *User {
+	u := &User{
+		ID:        user.ID,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+		Phone:     user.Phone,
+	}
+	if user.Username != "" {
+		u.Username = user.Username
+	} else if len(user.Usernames) > 0 {
+		u.Username = user.Usernames[0].Username
+	}
+	return u
+}
+
+func (c *Client) convertUserToChat(user *tg.User) *Chat {
+	name := user.FirstName
+	if user.LastName != "" {
+		name += " " + user.LastName
+	}
+	return &Chat{
+		ID:       user.ID,
+		Type:     ChatTypePrivate,
+		Title:    name,
+		Username: user.Username,
+	}
+}
+
+func (c *Client) convertChatClass(ch tg.ChatClass) *Chat {
+	switch chat := ch.(type) {
+	case *tg.Chat:
+		return &Chat{
+			ID:    chat.ID,
+			Type:  ChatTypeGroup,
+			Title: chat.Title,
+		}
+	case *tg.Channel:
+		chatType := ChatTypeSupergroup
+		if chat.Broadcast {
+			chatType = ChatTypeChannel
+		}
+		return &Chat{
+			ID:       chat.ID,
+			Type:     chatType,
+			Title:    chat.Title,
+			Username: chat.Username,
+		}
+	case *tg.ChatForbidden:
+		return &Chat{
+			ID:    chat.ID,
+			Type:  ChatTypeGroup,
+			Title: chat.Title,
+		}
+	case *tg.ChannelForbidden:
+		return &Chat{
+			ID:    chat.ID,
+			Type:  ChatTypeChannel,
+			Title: chat.Title,
+		}
+	}
+	return nil
+}
+
+func (c *Client) convertTypingAction(action tg.SendMessageActionClass) TypingAction {
+	switch action.(type) {
+	case *tg.SendMessageTypingAction:
+		return TypingActionTyping
+	case *tg.SendMessageRecordVideoAction:
+		return TypingActionRecordingVideo
+	case *tg.SendMessageRecordAudioAction:
+		return TypingActionRecordingVoice
+	case *tg.SendMessageUploadDocumentAction:
+		return TypingActionUploadingDocument
+	case *tg.SendMessageUploadPhotoAction:
+		return TypingActionUploadingPhoto
+	case *tg.SendMessageUploadVideoAction:
+		return TypingActionUploadingVideo
+	case *tg.SendMessageCancelAction:
+		return TypingActionCancel
+	}
+	return TypingActionTyping
+}
+
+// Internal state management
 
 func (c *Client) setAuthState(state AuthState) {
 	c.mu.Lock()
 	c.authState = state
 	c.mu.Unlock()
-
 	c.sendUpdate(AuthStateUpdate{State: state})
 }
 
@@ -235,7 +1023,6 @@ func (c *Client) setConnectionState(state ConnectionState) {
 	c.mu.Lock()
 	c.connState = state
 	c.mu.Unlock()
-
 	c.sendUpdate(ConnectionStateUpdate{State: state})
 }
 
@@ -254,12 +1041,18 @@ func (c *Client) sendUpdate(update Update) {
 }
 
 func (c *Client) cacheChat(chat *Chat) {
+	if chat == nil {
+		return
+	}
 	c.mu.Lock()
 	c.chats[chat.ID] = chat
 	c.mu.Unlock()
 }
 
 func (c *Client) cacheUser(user *User) {
+	if user == nil {
+		return
+	}
 	c.mu.Lock()
 	c.users[user.ID] = user
 	c.mu.Unlock()

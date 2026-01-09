@@ -63,7 +63,7 @@ type LoggingConfig struct {
 
 // TelegramConfig contains Telegram API settings
 type TelegramConfig struct {
-	APIID   int32  `toml:"api_id"`
+	APIID   int    `toml:"api_id"`
 	APIHash string `toml:"api_hash"`
 }
 
