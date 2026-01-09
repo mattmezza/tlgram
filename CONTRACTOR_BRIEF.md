@@ -261,17 +261,6 @@ Include:
 - Regular check-ins and demos
 - Iterate based on feedback
 
-## Budget & Payment
-
-**Budget**: Open to proposals (please provide estimate)
-
-**Payment Terms**: Negotiable, options:
-- **Milestone-based**: Pay after each phase/milestone
-- **Hourly**: Agree on hourly rate, regular invoicing
-- **Fixed-price**: Total project cost, paid in installments
-
-**Preference**: Milestone-based payment (aligns incentives)
-
 ## Questions?
 
 Feel free to reach out with questions about:
@@ -281,13 +270,11 @@ Feel free to reach out with questions about:
 - Budget constraints
 - Anything else
 
-**Contact**: [Your contact information]
-
 ## Repository Structure
 
 This repository contains:
 ```
-tg/
+tlgram/
 ├── requirements/              # All requirement documents (READ THIS FIRST)
 │   ├── README.md             # Requirements overview
 │   ├── FR-001-*.md           # Functional requirements (18 files)
@@ -305,7 +292,6 @@ This is a real project for my daily workflow. I've spent significant time defini
 - **Usability**: If vim keybindings don't feel natural, it's not done
 - **Communication**: Keep me informed, ask questions early
 
-I'm excited to work with someone who shares enthusiasm for terminal tools and efficient workflows. If this project resonates with you and you have the skills to execute it, I'd love to hear from you.
 
 Looking forward to your proposal!
 
@@ -314,3 +300,6 @@ Looking forward to your proposal!
 **Last Updated**: 2026-01-09
 **Status**: Seeking contractor for development
 **Expected Start**: As soon as possible
+
+
+Final note: i plan to release open sourced the result of your work. Pay extra attention to making sure the repository is ripe for collaboration.
