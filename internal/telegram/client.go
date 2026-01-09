@@ -59,10 +59,15 @@ type Client struct {
 	cancel     context.CancelFunc
 
 	// Auth flow state
-	phoneCode     chan string
-	password      chan string
-	authErr       chan error
-	pendingPhone  string
+	phoneCode       chan string
+	password        chan string
+	authErr         chan error
+	pendingPhone    string
+	phoneCodeHash   string
+
+	// Connection ready signal (sends error or nil)
+	ready     chan error
+	readyOnce sync.Once
 }
 
 // NewClient creates a new Telegram client
@@ -86,6 +91,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		phoneCode: make(chan string, 1),
 		password:  make(chan string, 1),
 		authErr:   make(chan error, 1),
+		ready:     make(chan error, 1),
 	}
 
 	return c, nil
@@ -123,15 +129,33 @@ func (c *Client) Start() error {
 	// Start the client in background
 	go c.run()
 
-	return nil
+	// Wait for connection to be ready (with timeout)
+	select {
+	case err := <-c.ready:
+		return err
+	case <-time.After(60 * time.Second):
+		return fmt.Errorf("connection timeout - check network and API credentials")
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
 }
 
 func (c *Client) run() {
 	c.setConnectionState(ConnectionStateConnecting)
 
+	// Helper to signal ready only once
+	signalReady := func(err error) {
+		c.readyOnce.Do(func() {
+			c.ready <- err
+		})
+	}
+
 	err := c.client.Run(c.ctx, func(ctx context.Context) error {
 		c.api = c.client.API()
 		c.setConnectionState(ConnectionStateReady)
+
+		// Signal that we're ready (no error)
+		signalReady(nil)
 
 		// Check if already authorized
 		status, err := c.client.Auth().Status(ctx)
@@ -158,29 +182,36 @@ func (c *Client) run() {
 		return ctx.Err()
 	})
 
+	// If Run() failed before callback executed, signal the error
 	if err != nil && err != context.Canceled {
+		signalReady(err)
 		c.sendUpdate(ErrorUpdate{Message: err.Error()})
 	}
 }
 
 func (c *Client) handleAuth(ctx context.Context) error {
-	flow := auth.NewFlow(
-		&authFlow{client: c},
-		auth.SendCodeOptions{},
-	)
+	// Don't use automatic auth flow - we handle it interactively
+	// Just wait for auth to be completed via SendPhoneNumber/SendAuthCode/Send2FAPassword
+	// The auth state machine is driven by the UI
 
-	if err := c.client.Auth().IfNecessary(ctx, flow); err != nil {
-		return err
+	// Wait for auth to complete or context to be cancelled
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if c.AuthState() == AuthStateReady {
+				// Auth completed, load initial data
+				if err := c.loadInitialData(ctx); err != nil {
+					c.sendUpdate(ErrorUpdate{Message: err.Error()})
+				}
+				return nil
+			}
+		}
 	}
-
-	c.setAuthState(AuthStateReady)
-
-	// Load initial data after auth
-	if err := c.loadInitialData(ctx); err != nil {
-		c.sendUpdate(ErrorUpdate{Message: err.Error()})
-	}
-
-	return nil
 }
 
 // authFlow implements auth.UserAuthenticator
@@ -436,17 +467,32 @@ func (c *Client) SendPhoneNumber(phone string) error {
 		ctx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
 		defer cancel()
 
-		_, err := c.api.AuthSendCode(ctx, &tg.AuthSendCodeRequest{
+		sentCodeClass, err := c.api.AuthSendCode(ctx, &tg.AuthSendCodeRequest{
 			PhoneNumber: phone,
 			APIID:       c.config.APIID,
 			APIHash:     c.config.APIHash,
 			Settings:    tg.CodeSettings{},
 		})
 		if err != nil {
-			c.sendUpdate(ErrorUpdate{Message: err.Error()})
+			c.sendUpdate(ErrorUpdate{Message: fmt.Sprintf("SendCode error: %v", err)})
 			return
 		}
-		c.setAuthState(AuthStateWaitCode)
+		// Store the phone code hash for later use in SignIn
+		switch v := sentCodeClass.(type) {
+		case *tg.AuthSentCode:
+			c.phoneCodeHash = v.PhoneCodeHash
+			c.setAuthState(AuthStateWaitCode)
+		case *tg.AuthSentCodeSuccess:
+			// Already authorized via another session
+			if auth, ok := v.Authorization.(*tg.AuthAuthorization); ok {
+				if user, ok := auth.User.(*tg.User); ok {
+					c.setMe(c.convertUser(user))
+				}
+			}
+			c.setAuthState(AuthStateReady)
+		default:
+			c.sendUpdate(ErrorUpdate{Message: fmt.Sprintf("Unexpected response type: %T", sentCodeClass)})
+		}
 	}()
 
 	return nil
@@ -454,51 +500,54 @@ func (c *Client) SendPhoneNumber(phone string) error {
 
 // SendAuthCode sends the authentication code
 func (c *Client) SendAuthCode(code string) error {
-	select {
-	case c.phoneCode <- code:
-		return nil
-	default:
-		// Channel full or not waiting for code
-		// Try direct sign in
-		go func() {
-			ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-			defer cancel()
+	go func() {
+		ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		defer cancel()
 
-			result, err := c.api.AuthSignIn(ctx, &tg.AuthSignInRequest{
-				PhoneNumber:   c.pendingPhone,
-				PhoneCodeHash: "", // We need to store this
-				PhoneCode:     code,
-			})
-			if err != nil {
-				// Check if 2FA is required
-				if errors.Is(err, auth.ErrPasswordAuthNeeded) {
-					c.setAuthState(AuthStateWaitPassword)
-					return
-				}
-				c.sendUpdate(ErrorUpdate{Message: err.Error()})
+		result, err := c.api.AuthSignIn(ctx, &tg.AuthSignInRequest{
+			PhoneNumber:   c.pendingPhone,
+			PhoneCodeHash: c.phoneCodeHash,
+			PhoneCode:     code,
+		})
+		if err != nil {
+			// Check if 2FA is required
+			if errors.Is(err, auth.ErrPasswordAuthNeeded) {
+				c.setAuthState(AuthStateWaitPassword)
 				return
 			}
+			c.sendUpdate(ErrorUpdate{Message: err.Error()})
+			return
+		}
 
-			if auth, ok := result.(*tg.AuthAuthorization); ok {
-				if user, ok := auth.User.(*tg.User); ok {
-					c.setMe(c.convertUser(user))
-				}
-				c.setAuthState(AuthStateReady)
-				c.loadInitialData(ctx)
+		if authorization, ok := result.(*tg.AuthAuthorization); ok {
+			if user, ok := authorization.User.(*tg.User); ok {
+				c.setMe(c.convertUser(user))
 			}
-		}()
-		return nil
-	}
+			c.setAuthState(AuthStateReady)
+		}
+	}()
+	return nil
 }
 
 // Send2FAPassword sends the two-factor authentication password
 func (c *Client) Send2FAPassword(pwd string) error {
-	select {
-	case c.password <- pwd:
-		return nil
-	default:
-		return fmt.Errorf("not waiting for password")
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		defer cancel()
+
+		// Get password info to compute SRP
+		password, err := c.client.Auth().Password(ctx, pwd)
+		if err != nil {
+			c.sendUpdate(ErrorUpdate{Message: err.Error()})
+			return
+		}
+
+		if user, ok := password.User.(*tg.User); ok {
+			c.setMe(c.convertUser(user))
+		}
+		c.setAuthState(AuthStateReady)
+	}()
+	return nil
 }
 
 // GetChats returns the list of chats

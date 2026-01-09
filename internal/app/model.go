@@ -62,6 +62,11 @@ type Model struct {
 	chatIdx     int
 	currentChat *Chat
 
+	// Switcher state
+	switcherInput    textinput.Model
+	switcherFiltered []*Chat
+	switcherIdx      int
+
 	// Reply state
 	replyingTo *Message
 
@@ -94,29 +99,29 @@ func New(cfg *config.Config, targetChat string) Model {
 	ti.Placeholder = "Type a message... (i to focus, Esc to blur)"
 	ti.CharLimit = 4096
 
+	// Switcher search input
+	switcherTi := textinput.New()
+	switcherTi.Placeholder = "Search chats..."
+	switcherTi.CharLimit = 100
+	switcherTi.Width = 40
+
 	vim := keybind.NewVimState()
 
 	// Check if we have API credentials - if not, we're in demo mode
 	demoMode := cfg.Telegram.APIID == 0 || cfg.Telegram.APIHash == ""
 
 	m := Model{
-		config:     cfg,
-		targetChat: targetChat,
-		vim:        vim,
-		demoMode:   demoMode,
-		authView:   auth.New(),
-		statusBar:  statusbar.New(),
-		input:      ti,
-		chats:      make([]*Chat, 0),
-		messages:   make([]*Message, 0),
+		config:        cfg,
+		targetChat:   targetChat,
+		vim:          vim,
+		demoMode:     demoMode,
+		authView:     auth.New(),
+		statusBar:    statusbar.New(),
+		input:        ti,
+		switcherInput: switcherTi,
+		chats:        make([]*Chat, 0),
+		messages:     make([]*Message, 0),
 	}
-
-	// Set up auth callbacks
-	m.authView.SetCallbacks(
-		m.handlePhoneSubmit,
-		m.handleCodeSubmit,
-		m.handlePasswordSubmit,
-	)
 
 	// In demo mode, start with chat view directly
 	if demoMode {
@@ -130,45 +135,6 @@ func New(cfg *config.Config, targetChat string) Model {
 	return m
 }
 
-// Auth callbacks
-func (m *Model) handlePhoneSubmit(phone string) tea.Cmd {
-	return func() tea.Msg {
-		if m.telegramClient == nil {
-			return authErrorMsg{err: fmt.Errorf("client not initialized")}
-		}
-		err := m.telegramClient.SendPhoneNumber(phone)
-		if err != nil {
-			return authErrorMsg{err: err}
-		}
-		return nil
-	}
-}
-
-func (m *Model) handleCodeSubmit(code string) tea.Cmd {
-	return func() tea.Msg {
-		if m.telegramClient == nil {
-			return authErrorMsg{err: fmt.Errorf("client not initialized")}
-		}
-		err := m.telegramClient.SendAuthCode(code)
-		if err != nil {
-			return authErrorMsg{err: err}
-		}
-		return nil
-	}
-}
-
-func (m *Model) handlePasswordSubmit(password string) tea.Cmd {
-	return func() tea.Msg {
-		if m.telegramClient == nil {
-			return authErrorMsg{err: fmt.Errorf("client not initialized")}
-		}
-		err := m.telegramClient.Send2FAPassword(password)
-		if err != nil {
-			return authErrorMsg{err: err}
-		}
-		return nil
-	}
-}
 
 // loadDemoData loads sample data for demo mode
 func (m *Model) loadDemoData() {
@@ -234,7 +200,9 @@ type messageSentMsg struct {
 	message *Message
 }
 
-type clientStartedMsg struct{}
+type clientStartedMsg struct {
+	client *telegram.Client
+}
 
 type clientErrorMsg struct {
 	err error
@@ -267,13 +235,11 @@ func (m *Model) startTelegramClient() tea.Cmd {
 			return clientErrorMsg{err: err}
 		}
 
-		m.telegramClient = client
-
 		if err := client.Start(); err != nil {
 			return clientErrorMsg{err: err}
 		}
 
-		return clientStartedMsg{}
+		return clientStartedMsg{client: client}
 	}
 }
 
@@ -308,7 +274,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case clientStartedMsg:
-		// Client started, start listening for updates
+		// Client started, store it and start listening for updates
+		m.telegramClient = msg.client
+		// Set auth view to wait for phone (client will update via AuthStateUpdate if already authed)
+		m.authView.SetState(telegram.AuthStateWaitPhoneNumber)
 		return m, m.listenForUpdates()
 
 	case clientErrorMsg:
@@ -320,6 +289,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authView.SetError(msg.err.Error())
 		m.authView.SetLoading(false)
 		return m, nil
+
+	case auth.PhoneSubmitMsg:
+		if m.telegramClient == nil {
+			m.authView.SetError("client not initialized")
+			m.authView.SetLoading(false)
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			err := m.telegramClient.SendPhoneNumber(msg.Phone)
+			if err != nil {
+				return authErrorMsg{err: err}
+			}
+			return nil
+		}
+
+	case auth.CodeSubmitMsg:
+		if m.telegramClient == nil {
+			m.authView.SetError("client not initialized")
+			m.authView.SetLoading(false)
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			err := m.telegramClient.SendAuthCode(msg.Code)
+			if err != nil {
+				return authErrorMsg{err: err}
+			}
+			return nil
+		}
+
+	case auth.PasswordSubmitMsg:
+		if m.telegramClient == nil {
+			m.authView.SetError("client not initialized")
+			m.authView.SetLoading(false)
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			err := m.telegramClient.Send2FAPassword(msg.Password)
+			if err != nil {
+				return authErrorMsg{err: err}
+			}
+			return nil
+		}
 
 	case telegramUpdateMsg:
 		newModel, cmd := m.handleTelegramUpdate(msg.update)
@@ -402,6 +413,13 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 				break
 			}
 		}
+		return m, nil
+
+	case telegram.ErrorUpdate:
+		// Show error in auth view or status bar
+		m.authView.SetError(u.Message)
+		m.authView.SetLoading(false)
+		m.lastError = u.Message
 		return m, nil
 	}
 
@@ -610,9 +628,28 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keybind.ActionOpenSwitcher:
 		m.prevView = m.currentView
 		m.currentView = ViewSwitcher
+		m.switcherInput.Reset()
+		m.switcherInput.Focus()
+		m.switcherIdx = 0
 	}
 
 	return m, nil
+}
+
+// getFilteredChats returns chats filtered by the switcher search input
+func (m Model) getFilteredChats() []*Chat {
+	query := strings.ToLower(strings.TrimSpace(m.switcherInput.Value()))
+	if query == "" {
+		return m.chats
+	}
+
+	var filtered []*Chat
+	for _, chat := range m.chats {
+		if strings.Contains(strings.ToLower(chat.Name), query) {
+			filtered = append(filtered, chat)
+		}
+	}
+	return filtered
 }
 
 func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -789,16 +826,31 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
-	case "esc", "escape", "ctrl+p":
+	case "esc", "escape":
 		m.currentView = m.prevView
+		m.switcherInput.Reset()
+		m.switcherFiltered = nil
+		m.switcherIdx = 0
 		return m, nil
 
 	case "enter":
 		// Select chat and switch to it
-		if len(m.chats) > 0 && m.chatIdx < len(m.chats) {
-			m.currentChat = m.chats[m.chatIdx]
+		filtered := m.getFilteredChats()
+		if len(filtered) > 0 && m.switcherIdx < len(filtered) {
+			m.currentChat = filtered[m.switcherIdx]
 			m.currentView = ViewChat
 			m.statusBar.SetChatName(m.currentChat.Name)
+			m.switcherInput.Reset()
+			m.switcherFiltered = nil
+			m.switcherIdx = 0
+
+			// Find the index in the main chat list
+			for i, c := range m.chats {
+				if c.ID == m.currentChat.ID {
+					m.chatIdx = i
+					break
+				}
+			}
 
 			if m.demoMode {
 				m.loadDemoData()
@@ -808,18 +860,33 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "j", "down", "ctrl+n":
-		if m.chatIdx < len(m.chats)-1 {
-			m.chatIdx++
+	case "down", "ctrl+n":
+		filtered := m.getFilteredChats()
+		if m.switcherIdx < len(filtered)-1 {
+			m.switcherIdx++
 		}
+		return m, nil
 
-	case "k", "up":
-		if m.chatIdx > 0 {
-			m.chatIdx--
+	case "up", "ctrl+p":
+		if m.switcherIdx > 0 {
+			m.switcherIdx--
 		}
+		return m, nil
+
+	case "backspace":
+		// Let the text input handle backspace
+		var cmd tea.Cmd
+		m.switcherInput, cmd = m.switcherInput.Update(msg)
+		m.switcherIdx = 0 // Reset selection when search changes
+		return m, cmd
+
+	default:
+		// Forward other keys to text input for searching
+		var cmd tea.Cmd
+		m.switcherInput, cmd = m.switcherInput.Update(msg)
+		m.switcherIdx = 0 // Reset selection when search changes
+		return m, cmd
 	}
-
-	return m, nil
 }
 
 // View implements tea.Model
@@ -828,15 +895,24 @@ func (m Model) View() string {
 		return "Goodbye!\n"
 	}
 
+	// Debug: show current view
+	viewName := map[View]string{
+		ViewAuth:     "AUTH",
+		ViewChatList: "CHATLIST",
+		ViewChat:     "CHAT",
+		ViewSwitcher: "SWITCHER",
+	}[m.currentView]
+	debugLine := fmt.Sprintf("[%s | chats:%d | idx:%d]", viewName, len(m.chats), m.chatIdx)
+
 	switch m.currentView {
 	case ViewAuth:
 		return m.viewAuth()
 	case ViewChatList:
-		return m.viewChatList()
+		return m.viewChatList() + "\n" + debugLine
 	case ViewChat:
-		return m.viewChat()
+		return m.viewChat() + "\n" + debugLine
 	case ViewSwitcher:
-		return m.viewSwitcher()
+		return m.viewSwitcher() + "\n" + debugLine
 	}
 
 	return "Unknown view"
@@ -889,13 +965,36 @@ func (m Model) viewChatList() string {
 		MarginBottom(1)
 
 	b.WriteString(titleStyle.Render("Chats"))
+	b.WriteString(fmt.Sprintf(" (%d)", len(m.chats)))
 	b.WriteString("\n\n")
 
-	// Chat list
-	for i, chat := range m.chats {
+	// Calculate visible window (show ~20 items centered on selection)
+	visibleCount := 20
+	if m.height > 10 {
+		visibleCount = m.height - 8
+	}
+
+	start := m.chatIdx - visibleCount/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + visibleCount
+	if end > len(m.chats) {
+		end = len(m.chats)
+		start = end - visibleCount
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	// Chat list with scrolling
+	for i := start; i < end; i++ {
+		chat := m.chats[i]
 		style := lipgloss.NewStyle()
+		prefix := "  "
 		if i == m.chatIdx {
 			style = style.Background(lipgloss.Color("237"))
+			prefix = "> "
 		}
 
 		unread := ""
@@ -904,13 +1003,15 @@ func (m Model) viewChatList() string {
 			style = style.Bold(true)
 		}
 
-		line := fmt.Sprintf("  %s%s", chat.Name, unread)
+		line := fmt.Sprintf("%s%s%s", prefix, chat.Name, unread)
 		b.WriteString(style.Render(line))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
 	b.WriteString(m.statusBar.View())
+	b.WriteString("\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("j/k: navigate • Enter: open • Ctrl+p: search • :q quit"))
 
 	return b.String()
 }
@@ -956,32 +1057,59 @@ func (m Model) viewSwitcher() string {
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("39")).
-		MarginBottom(1)
+		Foreground(lipgloss.Color("39"))
 
 	var content strings.Builder
-	content.WriteString(titleStyle.Render("Chat Switcher (Ctrl-p)"))
+	content.WriteString(titleStyle.Render("Switch Chat"))
 	content.WriteString("\n\n")
 
-	for i, chat := range m.chats {
-		style := lipgloss.NewStyle()
-		prefix := "  "
-		if i == m.chatIdx {
-			style = style.Background(lipgloss.Color("237")).Bold(true)
-			prefix = "> "
-		}
+	// Search input
+	content.WriteString(m.switcherInput.View())
+	content.WriteString("\n\n")
 
-		unread := ""
-		if chat.UnreadCount > 0 {
-			unread = fmt.Sprintf(" (%d)", chat.UnreadCount)
-		}
+	// Get filtered chats
+	filtered := m.getFilteredChats()
 
-		content.WriteString(style.Render(prefix + chat.Name + unread))
+	// Show max 15 chats with scrolling
+	visibleCount := 15
+	start := m.switcherIdx - visibleCount/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + visibleCount
+	if end > len(filtered) {
+		end = len(filtered)
+		start = end - visibleCount
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	if len(filtered) == 0 {
+		content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("No matching chats"))
 		content.WriteString("\n")
+	} else {
+		for i := start; i < end; i++ {
+			chat := filtered[i]
+			style := lipgloss.NewStyle()
+			prefix := "  "
+			if i == m.switcherIdx {
+				style = style.Background(lipgloss.Color("237")).Bold(true)
+				prefix = "> "
+			}
+
+			unread := ""
+			if chat.UnreadCount > 0 {
+				unread = fmt.Sprintf(" (%d)", chat.UnreadCount)
+			}
+
+			content.WriteString(style.Render(prefix + chat.Name + unread))
+			content.WriteString("\n")
+		}
 	}
 
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("j/k: navigate • Enter: select • Esc: close"))
+	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Type to search • ↑/↓: navigate • Enter: select • Esc: close"))
 
 	return boxStyle.Render(content.String())
 }

@@ -9,6 +9,11 @@ import (
 	"github.com/mattmezza/tlgram/internal/telegram"
 )
 
+// Messages returned by auth view for parent to handle
+type PhoneSubmitMsg struct{ Phone string }
+type CodeSubmitMsg struct{ Code string }
+type PasswordSubmitMsg struct{ Password string }
+
 // Styles
 var (
 	titleStyle = lipgloss.NewStyle().
@@ -40,11 +45,6 @@ type Model struct {
 	input    textinput.Model
 	errorMsg string
 	loading  bool
-
-	// Callbacks
-	onPhoneSubmit    func(phone string) tea.Cmd
-	onCodeSubmit     func(code string) tea.Cmd
-	onPasswordSubmit func(password string) tea.Cmd
 }
 
 // New creates a new auth model
@@ -56,7 +56,7 @@ func New() Model {
 	ti.Width = 30
 
 	return Model{
-		state: telegram.AuthStateWaitPhoneNumber,
+		state: telegram.AuthStateUnknown, // Start in loading state until client connects
 		input: ti,
 	}
 }
@@ -97,17 +97,6 @@ func (m *Model) SetLoading(loading bool) {
 	m.loading = loading
 }
 
-// SetCallbacks sets the submission callbacks
-func (m *Model) SetCallbacks(
-	onPhone func(string) tea.Cmd,
-	onCode func(string) tea.Cmd,
-	onPassword func(string) tea.Cmd,
-) {
-	m.onPhoneSubmit = onPhone
-	m.onCodeSubmit = onCode
-	m.onPasswordSubmit = onPassword
-}
-
 // SetSize sets the dimensions
 func (m *Model) SetSize(width, height int) {
 	m.width = width
@@ -142,6 +131,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleSubmit() (Model, tea.Cmd) {
+	// Don't submit if we're in loading/unknown state (client not ready)
+	if m.state == telegram.AuthStateUnknown || m.state == telegram.AuthStateReady {
+		return m, nil
+	}
+
 	value := strings.TrimSpace(m.input.Value())
 	if value == "" {
 		return m, nil
@@ -151,17 +145,11 @@ func (m Model) handleSubmit() (Model, tea.Cmd) {
 
 	switch m.state {
 	case telegram.AuthStateWaitPhoneNumber:
-		if m.onPhoneSubmit != nil {
-			return m, m.onPhoneSubmit(value)
-		}
+		return m, func() tea.Msg { return PhoneSubmitMsg{Phone: value} }
 	case telegram.AuthStateWaitCode:
-		if m.onCodeSubmit != nil {
-			return m, m.onCodeSubmit(value)
-		}
+		return m, func() tea.Msg { return CodeSubmitMsg{Code: value} }
 	case telegram.AuthStateWaitPassword:
-		if m.onPasswordSubmit != nil {
-			return m, m.onPasswordSubmit(value)
-		}
+		return m, func() tea.Msg { return PasswordSubmitMsg{Password: value} }
 	}
 
 	return m, nil
@@ -276,5 +264,17 @@ func (m Model) viewReady() string {
 }
 
 func (m Model) viewLoading() string {
-	return "Initializing..."
+	var content strings.Builder
+	content.WriteString(titleStyle.Render("tlgram - Terminal Telegram Client"))
+	content.WriteString("\n\n")
+	content.WriteString("Connecting to Telegram...")
+	content.WriteString("\n")
+
+	if m.errorMsg != "" {
+		content.WriteString("\n")
+		content.WriteString(errorStyle.Render(m.errorMsg))
+		content.WriteString("\n")
+	}
+
+	return content.String()
 }
