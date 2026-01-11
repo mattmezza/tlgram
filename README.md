@@ -6,7 +6,7 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 
 - **Vim keybindings** - Navigate with hjkl, gg/G, Ctrl-d/u, H/L
 - **Line-based cursor** - Move through messages line by line, handles wrapped text naturally
-- **Multi-line messages** - Compose multi-line messages with auto-expanding input
+- **Multi-line messages** - Compose multi-line messages (Enter for newline, Alt-Enter to send)
 - **CLI chat opening** - `tlgram --chat @username` or `tlgram --chat work`
 - **Multiple instances** - Run different chats in different tmux panes
 - **Fuzzy chat switcher** - Ctrl-p to search and switch chats (searches names and @usernames)
@@ -134,8 +134,6 @@ tlgram --version           # Show version
 | `Enter` | Insert newline (for multi-line messages) |
 | `Alt-Enter` | Send message (stays in INSERT mode) |
 | `Escape` | Exit to NORMAL mode |
-
-Note: The input area auto-expands as you type (up to 6 lines).
 
 ## Header Bar
 

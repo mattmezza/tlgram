@@ -118,8 +118,11 @@ func New(cfg *config.Config, targetChat string) Model {
 	ti := textarea.New()
 	ti.Placeholder = "Type a message..."
 	ti.CharLimit = 4096
-	ti.SetHeight(1) // Start small, expands as user types
+	ti.SetHeight(3) // Fixed height, scrolls internally for longer messages
 	ti.ShowLineNumbers = false
+	// Disable cursor line highlighting (too bright by default)
+	ti.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ti.BlurredStyle.CursorLine = lipgloss.NewStyle()
 
 	// Switcher search input
 	switcherTi := textinput.New()
@@ -1155,7 +1158,6 @@ func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd)
 		m.vim.SetMode(keybind.ModeNormal)
 		m.statusBar.SetMode(keybind.ModeNormal)
 		m.input.Blur()
-		m.input.SetHeight(1) // Reset to minimum height
 		m.replyingTo = nil
 		return m, nil
 	}
@@ -1191,25 +1193,19 @@ func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd)
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 
-	// Auto-expand textarea height based on content (max 6 lines)
+	// Auto-expand textarea height based on content (min 3, max 6 lines)
 	m.adjustTextareaHeight()
 
 	return m, cmd
 }
 
-// adjustTextareaHeight adjusts textarea height based on content, up to maxHeight
+// adjustTextareaHeight adjusts textarea height based on content
 func (m *Model) adjustTextareaHeight() {
-	const minHeight = 1
+	const minHeight = 3
 	const maxHeight = 6
 
-	content := m.input.Value()
-	if content == "" {
-		m.input.SetHeight(minHeight)
-		return
-	}
-
-	// Count newlines in content
-	lineCount := strings.Count(content, "\n") + 1
+	// Count lines in content
+	lineCount := m.input.LineCount()
 
 	// Clamp to min/max
 	height := lineCount
@@ -1243,7 +1239,6 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 
 	// Clear input and reply state
 	m.input.Reset()
-	m.input.SetHeight(1) // Reset to minimum height
 	replyingTo := m.replyingTo
 	m.replyingTo = nil
 
@@ -1770,8 +1765,8 @@ func (m Model) renderMessages(maxHeight int) string {
 
 // renderLine renders a single message line with appropriate styling
 func (m Model) renderLine(line messageLine, contentWidth int, isCursor bool) string {
-	// Base styles - cursor adds background to all
-	cursorBg := lipgloss.Color("237")
+	// Base styles - cursor adds subtle background highlight
+	cursorBg := lipgloss.Color("235")
 
 	// Build styles based on cursor state
 	var senderStyle, ownSenderStyle, timeStyle, replyStyle, textStyle lipgloss.Style
