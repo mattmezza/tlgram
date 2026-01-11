@@ -72,13 +72,17 @@ type Model struct {
 	replyingTo *Message
 
 	// Cursor state (line-based navigation)
-	cursorLine int // Which visual line the cursor is on (0-indexed)
+	cursorLine    int // Which visual line the cursor is on (0-indexed)
+	viewportStart int // First visible line in viewport
 
 	// Display preferences
 	showUsernames bool // Toggle between full name and @username
 
 	// Loading state
 	loadingMore bool
+
+	// New messages indicator (when scrolled up)
+	newMsgCount int
 
 	// Error state
 	lastError string
@@ -429,7 +433,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursorLine < 0 {
 				m.cursorLine = 0
 			}
+			// Set viewport to show cursor at bottom
+			m.adjustViewport()
 		}
+		m.newMsgCount = 0
 		return m, nil
 
 	case moreMessagesLoadedMsg:
@@ -451,8 +458,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Prepend older messages
 			m.messages = append(msg.messages, m.messages...)
-			// Adjust cursorLine to keep viewing the same content
+			// Adjust cursorLine and viewportStart to keep viewing the same content
 			m.cursorLine += linesAdded
+			m.viewportStart += linesAdded
 		}
 		return m, nil
 
@@ -550,8 +558,11 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 				// Only auto-scroll if cursor was already at the bottom
 				if wasAtBottom {
 					m.cursorLine = m.getTotalLines() - 1
+					m.newMsgCount = 0 // Reset counter when at bottom
+				} else {
+					// Track new message count when scrolled up
+					m.newMsgCount++
 				}
-				// If not at bottom, cursor stays where it is (new messages appear below)
 			}
 		}
 		return m, nil
@@ -970,21 +981,18 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case keybind.ActionMoveDown:
 		// Move cursor down by lines
-		totalLines := m.getTotalLines()
 		m.cursorLine += result.Count
-		if m.cursorLine >= totalLines {
-			m.cursorLine = totalLines - 1
-		}
-		if m.cursorLine < 0 {
-			m.cursorLine = 0
+		m.adjustViewport()
+		// Reset new message counter if at bottom
+		totalLines := m.getTotalLines()
+		if m.cursorLine >= totalLines-1 {
+			m.newMsgCount = 0
 		}
 
 	case keybind.ActionMoveUp:
 		// Move cursor up by lines
 		m.cursorLine -= result.Count
-		if m.cursorLine < 0 {
-			m.cursorLine = 0
-		}
+		m.adjustViewport()
 		// Load more messages when reaching the top
 		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
 			m.loadingMore = true
@@ -993,6 +1001,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case keybind.ActionJumpTop:
 		m.cursorLine = 0
+		m.adjustViewport()
 		// Load more messages when jumping to top
 		if !m.loadingMore && !m.demoMode {
 			m.loadingMore = true
@@ -1004,28 +1013,30 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		totalLines := m.getTotalLines()
 		if totalLines > 0 {
 			m.cursorLine = totalLines - 1
+			m.newMsgCount = 0 // Reset new message counter
 		}
+		m.adjustViewport()
 
 	case keybind.ActionHalfPageDown:
-		pageSize := (m.height - 6) / 2
+		pageSize := m.getViewportHeight() / 2
 		if pageSize < 1 {
 			pageSize = 1
 		}
-		totalLines := m.getTotalLines()
 		m.cursorLine += pageSize * result.Count
-		if m.cursorLine >= totalLines {
-			m.cursorLine = totalLines - 1
+		m.adjustViewport()
+		// Reset new message counter if at bottom
+		totalLines := m.getTotalLines()
+		if m.cursorLine >= totalLines-1 {
+			m.newMsgCount = 0
 		}
 
 	case keybind.ActionHalfPageUp:
-		pageSize := (m.height - 6) / 2
+		pageSize := m.getViewportHeight() / 2
 		if pageSize < 1 {
 			pageSize = 1
 		}
 		m.cursorLine -= pageSize * result.Count
-		if m.cursorLine < 0 {
-			m.cursorLine = 0
-		}
+		m.adjustViewport()
 		// Load more messages when reaching the top
 		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
 			m.loadingMore = true
@@ -1033,30 +1044,50 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case keybind.ActionPageDown:
-		pageSize := m.height - 6
+		pageSize := m.getViewportHeight()
 		if pageSize < 1 {
 			pageSize = 1
 		}
-		totalLines := m.getTotalLines()
 		m.cursorLine += pageSize * result.Count
-		if m.cursorLine >= totalLines {
-			m.cursorLine = totalLines - 1
+		m.adjustViewport()
+		// Reset new message counter if at bottom
+		totalLines := m.getTotalLines()
+		if m.cursorLine >= totalLines-1 {
+			m.newMsgCount = 0
 		}
 
 	case keybind.ActionPageUp:
-		pageSize := m.height - 6
+		pageSize := m.getViewportHeight()
 		if pageSize < 1 {
 			pageSize = 1
 		}
 		m.cursorLine -= pageSize * result.Count
-		if m.cursorLine < 0 {
-			m.cursorLine = 0
-		}
+		m.adjustViewport()
 		// Load more messages when reaching the top
 		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
+
+	case keybind.ActionViewportTop:
+		// H - move cursor to top of visible viewport
+		m.cursorLine = m.viewportStart
+		// Don't call adjustViewport - we're moving within viewport
+
+	case keybind.ActionViewportBottom:
+		// L - move cursor to bottom of visible viewport
+		viewportHeight := m.getViewportHeight()
+		totalLines := m.getTotalLines()
+		lastVisibleLine := m.viewportStart + viewportHeight - 1
+		if lastVisibleLine >= totalLines {
+			lastVisibleLine = totalLines - 1
+		}
+		m.cursorLine = lastVisibleLine
+		// Reset new message counter if at bottom
+		if m.cursorLine >= totalLines-1 {
+			m.newMsgCount = 0
+		}
+		// Don't call adjustViewport - we're moving within viewport
 
 	case keybind.ActionEnterInsert:
 		m.statusBar.SetMode(keybind.ModeInsert)
@@ -1176,10 +1207,7 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 	replyingTo := m.replyingTo
 	m.replyingTo = nil
 
-	// Return to normal mode
-	m.vim.SetMode(keybind.ModeNormal)
-	m.statusBar.SetMode(keybind.ModeNormal)
-	m.input.Blur()
+	// Stay in insert mode to allow sending multiple messages
 
 	// Send message
 	if m.demoMode {
@@ -1644,7 +1672,7 @@ func (m Model) renderMessages(maxHeight int) string {
 		viewportHeight = 1
 	}
 
-	// Clamp cursorLine (use local var since we can't modify m in View)
+	// Use cursor and viewport state from model (local vars for View safety)
 	cursorLine := m.cursorLine
 	if cursorLine >= totalLines {
 		cursorLine = totalLines - 1
@@ -1653,15 +1681,8 @@ func (m Model) renderMessages(maxHeight int) string {
 		cursorLine = 0
 	}
 
-	// Calculate viewport start to keep cursor visible
-	viewportStart := 0
-	if cursorLine >= viewportHeight {
-		// Cursor would be below viewport, scroll down
-		viewportStart = cursorLine - viewportHeight + 1
-	}
-	// If cursor is above current viewport, viewportStart stays at 0 or adjusts
-	// This simple logic keeps cursor at bottom of viewport when scrolling down
-	// and at top when scrolling up
+	// Use viewportStart from model (already adjusted by navigation handlers)
+	viewportStart := m.viewportStart
 
 	// Ensure viewport doesn't go past end
 	maxViewportStart := totalLines - viewportHeight
@@ -1670,6 +1691,9 @@ func (m Model) renderMessages(maxHeight int) string {
 	}
 	if viewportStart > maxViewportStart {
 		viewportStart = maxViewportStart
+	}
+	if viewportStart < 0 {
+		viewportStart = 0
 	}
 
 	// Render visible lines
@@ -1705,6 +1729,13 @@ func (m Model) renderMessages(maxHeight int) string {
 	if viewportEnd < totalLines {
 		scrollInfo = scrollInfo + "↓"
 	}
+
+	// Add new messages indicator if there are unread messages below
+	if m.newMsgCount > 0 {
+		newMsgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+		scrollInfo = scrollInfo + " " + newMsgStyle.Render(fmt.Sprintf("(%d new)", m.newMsgCount))
+	}
+
 	visibleLines = append(visibleLines, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(scrollInfo))
 
 	return strings.Join(visibleLines, "\n")
@@ -1783,6 +1814,54 @@ func (m Model) getTotalLines() int {
 		totalLines += len(wrappedLines)
 	}
 	return totalLines
+}
+
+// getViewportHeight returns the number of visible lines in the message viewport
+func (m Model) getViewportHeight() int {
+	// Height minus status bar (1), input area (~3), scroll indicator (1)
+	vh := m.height - 6
+	if vh < 1 {
+		vh = 1
+	}
+	return vh
+}
+
+// adjustViewport ensures cursor is visible and adjusts viewportStart if needed
+func (m *Model) adjustViewport() {
+	totalLines := m.getTotalLines()
+	viewportHeight := m.getViewportHeight()
+
+	// Clamp cursor to valid range
+	if m.cursorLine < 0 {
+		m.cursorLine = 0
+	}
+	if m.cursorLine >= totalLines {
+		m.cursorLine = totalLines - 1
+	}
+	if m.cursorLine < 0 {
+		m.cursorLine = 0
+	}
+
+	// Only scroll viewport if cursor is outside visible area
+	if m.cursorLine < m.viewportStart {
+		// Cursor above viewport - scroll up
+		m.viewportStart = m.cursorLine
+	} else if m.cursorLine >= m.viewportStart+viewportHeight {
+		// Cursor below viewport - scroll down
+		m.viewportStart = m.cursorLine - viewportHeight + 1
+	}
+
+	// Clamp viewport to valid range
+	maxViewportStart := totalLines - viewportHeight
+	if maxViewportStart < 0 {
+		maxViewportStart = 0
+	}
+	if m.viewportStart > maxViewportStart {
+		m.viewportStart = maxViewportStart
+	}
+	if m.viewportStart < 0 {
+		m.viewportStart = 0
+	}
 }
 
 // clipboardResultMsg is sent when clipboard operation completes

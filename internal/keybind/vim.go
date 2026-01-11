@@ -50,6 +50,8 @@ const (
 	ActionHalfPageDown
 	ActionPageUp
 	ActionPageDown
+	ActionViewportTop    // H - move to top of visible viewport
+	ActionViewportBottom // L - move to bottom of visible viewport
 
 	// Mode changes
 	ActionEnterInsert
@@ -174,6 +176,12 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "G":
 		v.reset()
 		return Result{Action: ActionJumpBottom}
+	case "H":
+		v.reset()
+		return Result{Action: ActionViewportTop}
+	case "L":
+		v.reset()
+		return Result{Action: ActionViewportBottom}
 	case "ctrl+d":
 		v.reset()
 		return Result{Action: ActionHalfPageDown, Count: count}

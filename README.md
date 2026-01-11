@@ -89,6 +89,8 @@ tlgram --version           # Show version
 | `j` / `k` | Move cursor down/up by line |
 | `gg` | Jump to first line (loads older messages) |
 | `G` | Jump to last line |
+| `H` | Move cursor to top of visible viewport |
+| `L` | Move cursor to bottom of visible viewport |
 | `Ctrl-d` | Scroll half page down |
 | `Ctrl-u` | Scroll half page up |
 | `Ctrl-f` | Scroll full page down |
@@ -130,7 +132,7 @@ tlgram --version           # Show version
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send message (configurable) |
+| `Enter` | Send message (stays in INSERT mode for multiple messages) |
 | `Escape` | Exit to NORMAL mode |
 
 ## Header Bar
@@ -142,6 +144,18 @@ The header bar displays contextual information based on chat type:
 - **Channels**: `NORMAL Channel Name (x subscribers)` + connection status
 
 When there are unread messages, a red badge shows the count on the right side.
+
+## Scroll Indicator
+
+The bottom of the message view shows a scroll indicator:
+
+```
+↑ ─ line 50/133 ↓ (3 new)
+```
+
+- `↑` / `↓` arrows indicate more content above/below
+- Line position shows current cursor location
+- `(N new)` appears when new messages arrive while scrolled up
 
 ## Configuration
 
