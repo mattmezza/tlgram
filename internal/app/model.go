@@ -1480,7 +1480,8 @@ func (m Model) viewChat() string {
 	parts = append(parts, m.statusBar.View())
 
 	// Messages
-	msgHeight := m.height - 5 // Room for status bar, input, borders
+	// Height calculation: status bar (1) + input textarea (3) + input border (2) + scroll indicator (1) = 7
+	msgHeight := m.height - 7
 	if m.replyingTo != nil {
 		msgHeight--
 	}
@@ -1635,6 +1636,15 @@ func (m Model) renderMessages(maxHeight int) string {
 		return emptyStyle.Render("No messages yet. Press 'i' to start typing.")
 	}
 
+	// Calculate max sender name length for alignment
+	maxSenderLen := 0
+	for _, msg := range m.messages {
+		senderName := m.getSenderName(msg)
+		if len(senderName) > maxSenderLen {
+			maxSenderLen = len(senderName)
+		}
+	}
+
 	// Calculate available width for message text (leave room for sender prefix)
 	contentWidth := m.width - 4
 	if contentWidth < 40 {
@@ -1668,8 +1678,8 @@ func (m Model) renderMessages(maxHeight int) string {
 		// Format timestamp with relative date
 		timestamp := formatRelativeTime(msg.Time)
 
-		// Wrap long messages
-		wrappedLines := wrapText(msg.Text, contentWidth-len(senderName)-4)
+		// Wrap long messages (use maxSenderLen for consistent width)
+		wrappedLines := wrapText(msg.Text, contentWidth-maxSenderLen-4)
 
 		for i, wline := range wrappedLines {
 			if i == 0 {
@@ -1734,7 +1744,7 @@ func (m Model) renderMessages(maxHeight int) string {
 	for i := viewportStart; i < viewportEnd; i++ {
 		line := allLines[i]
 		isCursor := (i == cursorLine)
-		renderedLine := m.renderLine(line, contentWidth, isCursor)
+		renderedLine := m.renderLine(line, contentWidth, maxSenderLen, isCursor)
 		visibleLines = append(visibleLines, renderedLine)
 	}
 
@@ -1764,7 +1774,7 @@ func (m Model) renderMessages(maxHeight int) string {
 }
 
 // renderLine renders a single message line with appropriate styling
-func (m Model) renderLine(line messageLine, contentWidth int, isCursor bool) string {
+func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, isCursor bool) string {
 	// Base styles - cursor adds subtle background highlight
 	cursorBg := lipgloss.Color("235")
 
@@ -1789,9 +1799,13 @@ func (m Model) renderLine(line messageLine, contentWidth int, isCursor bool) str
 
 	switch line.lineType {
 	case 0: // Reply line
-		result = replyStyle.Render(line.content)
+		// Indent reply to align with message content
+		replyIndent := strings.Repeat(" ", maxSenderLen+2)
+		result = textStyle.Render(replyIndent) + replyStyle.Render(line.content)
 
 	case 1: // First line with sender and timestamp
+		// Right-align sender name by padding on the left
+		senderPadding := strings.Repeat(" ", maxSenderLen-len(line.sender))
 		var styledSender string
 		if line.isOwn {
 			styledSender = ownSenderStyle.Render(line.sender)
@@ -1799,17 +1813,19 @@ func (m Model) renderLine(line messageLine, contentWidth int, isCursor bool) str
 			styledSender = senderStyle.Render(line.sender)
 		}
 
-		// Calculate padding for right-aligned timestamp
-		baseLen := len(line.sender) + 2 + len(line.content)
-		padding := contentWidth - baseLen - len(line.timestamp)
+		// Calculate padding for right-aligned timestamp (use lipgloss.Width for emoji support)
+		contentDisplayWidth := lipgloss.Width(line.content)
+		timestampDisplayWidth := lipgloss.Width(line.timestamp)
+		baseLen := maxSenderLen + 2 + contentDisplayWidth
+		padding := contentWidth - baseLen - timestampDisplayWidth
 		if padding < 1 {
 			padding = 1
 		}
 
-		result = styledSender + textStyle.Render(": "+line.content+strings.Repeat(" ", padding)) + timeStyle.Render(line.timestamp)
+		result = textStyle.Render(senderPadding) + styledSender + textStyle.Render(": "+line.content+strings.Repeat(" ", padding)) + timeStyle.Render(line.timestamp)
 
 	case 2: // Continuation line
-		indent := strings.Repeat(" ", len(line.sender)+2)
+		indent := strings.Repeat(" ", maxSenderLen+2)
 		result = textStyle.Render(indent + line.content)
 	}
 
