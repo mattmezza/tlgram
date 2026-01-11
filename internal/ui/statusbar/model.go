@@ -33,12 +33,6 @@ var (
 			Padding(0, 1).
 			Bold(true)
 
-	modeCommandStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("241")).
-			Foreground(lipgloss.Color("230")).
-			Padding(0, 1).
-			Bold(true)
-
 	chatNameStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("252"))
@@ -167,8 +161,6 @@ func (m Model) View() string {
 		modeView = modeInsertStyle.Render("INSERT")
 	case keybind.ModeSearch:
 		modeView = modeSearchStyle.Render("SEARCH")
-	case keybind.ModeCommand:
-		modeView = modeCommandStyle.Render("COMMAND")
 	default:
 		modeView = modeNormalStyle.Render("NORMAL")
 	}

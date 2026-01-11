@@ -13,7 +13,6 @@ const (
 	ModeNormal Mode = iota
 	ModeInsert
 	ModeSearch
-	ModeCommand
 )
 
 func (m Mode) String() string {
@@ -24,8 +23,6 @@ func (m Mode) String() string {
 		return "INSERT"
 	case ModeSearch:
 		return "SEARCH"
-	case ModeCommand:
-		return "COMMAND"
 	default:
 		return "UNKNOWN"
 	}
@@ -56,7 +53,6 @@ const (
 	// Mode changes
 	ActionEnterInsert
 	ActionEnterSearch
-	ActionEnterCommand
 	ActionExitToNormal
 
 	// Actions
@@ -129,8 +125,6 @@ func (v *VimState) ProcessKey(key string) Result {
 		return v.processInsertMode(key)
 	case ModeSearch:
 		return v.processSearchMode(key)
-	case ModeCommand:
-		return v.processCommandMode(key)
 	}
 
 	return Result{Action: ActionUnknown}
@@ -202,10 +196,6 @@ func (v *VimState) processNormalMode(key string) Result {
 		v.reset()
 		v.mode = ModeSearch
 		return Result{Action: ActionEnterSearch}
-	case ":":
-		v.reset()
-		v.mode = ModeCommand
-		return Result{Action: ActionEnterCommand}
 	case "r":
 		v.reset()
 		return Result{Action: ActionReply}
@@ -262,19 +252,6 @@ func (v *VimState) processSearchMode(key string) Result {
 		return Result{Action: ActionSearchNext}
 	case "N":
 		return Result{Action: ActionSearchPrev}
-	}
-	return Result{Action: ActionNone}
-}
-
-func (v *VimState) processCommandMode(key string) Result {
-	switch key {
-	case "esc", "escape":
-		v.reset()
-		v.mode = ModeNormal
-		return Result{Action: ActionExitToNormal}
-	case "enter":
-		v.reset()
-		return Result{Action: ActionSelect}
 	}
 	return Result{Action: ActionNone}
 }

@@ -35,6 +35,7 @@ type AppearanceConfig struct {
 	AlwaysShowTimestamps bool   `toml:"always_show_timestamps"`
 	TimestampFormat      string `toml:"timestamp_format"`
 	Theme                string `toml:"theme"`
+	AuthorDisplay        string `toml:"author_display"` // "fullname" or "username"
 }
 
 // KeybindingsConfig contains keybinding settings
@@ -84,6 +85,7 @@ func Default() *Config {
 			AlwaysShowTimestamps: false,
 			TimestampFormat:      "15:04:05",
 			Theme:                "default",
+			AuthorDisplay:        "fullname",
 		},
 		ChatAliases: make(map[string]string),
 		Keybindings: KeybindingsConfig{
@@ -163,6 +165,11 @@ func (c *Config) validate() error {
 		return fmt.Errorf("invalid log level: %q (must be debug, info, warn, or error)", c.Logging.Level)
 	}
 
+	// Validate author_display
+	if c.Appearance.AuthorDisplay != "" && c.Appearance.AuthorDisplay != "fullname" && c.Appearance.AuthorDisplay != "username" {
+		return fmt.Errorf("invalid author_display: %q (must be 'fullname' or 'username')", c.Appearance.AuthorDisplay)
+	}
+
 	// Validate chat aliases
 	for alias, target := range c.ChatAliases {
 		if alias == "" || target == "" {
@@ -226,6 +233,10 @@ timestamp_format = "15:04:05"
 
 # Color theme
 theme = "default"
+
+# Author display format: "fullname" or "username"
+# Toggle with 'u' key in chat view
+author_display = "fullname"
 
 [chat_aliases]
 # Define shortcuts for your frequent chats

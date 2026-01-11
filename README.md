@@ -102,7 +102,6 @@ tlgram --version           # Show version
 |-----|--------|
 | `i` | Enter INSERT mode (compose message) |
 | `/` | Enter SEARCH mode |
-| `:` | Enter COMMAND mode |
 | `Escape` | Return to NORMAL mode |
 
 #### Actions (NORMAL mode)
@@ -171,6 +170,10 @@ send_key = "enter"  # or "ctrl-enter"
 download_dir = "~/Downloads/tlgram"
 auto_mark_read = true
 initial_message_count = 50
+
+[appearance]
+# Author display: "fullname" or "username" (toggle with 'u' key)
+author_display = "fullname"
 
 [chat_aliases]
 work = "@john_doe"

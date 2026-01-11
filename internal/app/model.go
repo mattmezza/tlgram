@@ -139,6 +139,7 @@ func New(cfg *config.Config, targetChat string) Model {
 		switcherInput: switcherTi,
 		chats:        make([]*Chat, 0),
 		messages:     make([]*Message, 0),
+		showUsernames: cfg.Appearance.AuthorDisplay == "username",
 	}
 
 	// In demo mode, start with chat view directly
@@ -507,6 +508,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursorLine < 0 {
 			m.cursorLine = 0
 		}
+		// Adjust viewport to show the sent message
+		m.adjustViewport()
+		m.newMsgCount = 0
 		var cmd tea.Cmd
 		m.statusBar, cmd = m.statusBar.ShowNotification("Sent!", 2*time.Second)
 		cmds = append(cmds, cmd)
@@ -1555,10 +1559,14 @@ func (m Model) viewSwitcher() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-// messageLine represents a rendered line and which message it belongs to
+// messageLine represents a line and which message it belongs to
 type messageLine struct {
-	text   string
-	msgIdx int
+	msgIdx    int
+	lineType  int    // 0=reply, 1=firstLine, 2=continuation
+	sender    string // raw sender name (for first line)
+	content   string // message content or reply text
+	timestamp string // formatted timestamp (for first line)
+	isOwn     bool   // whether this is own message
 }
 
 // formatRelativeTime formats a time as relative to now
@@ -1593,19 +1601,13 @@ func (m Model) renderMessages(maxHeight int) string {
 		return emptyStyle.Render("No messages yet. Press 'i' to start typing.")
 	}
 
-	// Styles
-	senderStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	ownSenderStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	replyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
-
 	// Calculate available width for message text (leave room for sender prefix)
 	contentWidth := m.width - 4
 	if contentWidth < 40 {
 		contentWidth = 40
 	}
 
-	// Build all lines with message index tracking
+	// Build all lines with raw data (styling applied at render time)
 	var allLines []messageLine
 
 	for msgIdx, msg := range m.messages {
@@ -1620,49 +1622,41 @@ func (m Model) renderMessages(maxHeight int) string {
 				replyText = replyText[:30] + "..."
 			}
 			allLines = append(allLines, messageLine{
-				text:   replyStyle.Render(fmt.Sprintf("↳ %s: %s", replySender, replyText)),
-				msgIdx: msgIdx,
+				msgIdx:   msgIdx,
+				lineType: 0, // reply
+				content:  fmt.Sprintf("↳ %s: %s", replySender, replyText),
 			})
 		}
 
 		// Determine which name to show
-		var senderName string
-		var senderDisplay string
-		if msg.IsOwn {
-			senderName = "You"
-			senderDisplay = ownSenderStyle.Render("You")
-		} else {
-			senderName = msg.Sender
-			if m.showUsernames && msg.SenderUsername != "" {
-				senderName = msg.SenderUsername
-			}
-			senderDisplay = senderStyle.Render(senderName)
-		}
+		senderName := m.getSenderName(msg)
 
 		// Format timestamp with relative date
 		timestamp := formatRelativeTime(msg.Time)
 
 		// Wrap long messages
-		msgText := msg.Text
-		wrappedLines := wrapText(msgText, contentWidth-len(senderName)-4)
+		wrappedLines := wrapText(msg.Text, contentWidth-len(senderName)-4)
 
 		for i, wline := range wrappedLines {
-			var lineText string
 			if i == 0 {
-				// First line: include sender and timestamp
-				// Calculate padding to right-align timestamp
-				baseLen := len(senderName) + 2 + len(wline) // "sender: text"
-				padding := contentWidth - baseLen - len(timestamp)
-				if padding < 1 {
-					padding = 1
-				}
-				lineText = senderDisplay + ": " + wline + strings.Repeat(" ", padding) + timeStyle.Render(timestamp)
+				// First line with sender and timestamp
+				allLines = append(allLines, messageLine{
+					msgIdx:    msgIdx,
+					lineType:  1, // firstLine
+					sender:    senderName,
+					content:   wline,
+					timestamp: timestamp,
+					isOwn:     msg.IsOwn,
+				})
 			} else {
-				// Continuation: indent to align with message text
-				indent := strings.Repeat(" ", len(senderName)+2)
-				lineText = indent + wline
+				// Continuation line
+				allLines = append(allLines, messageLine{
+					msgIdx:   msgIdx,
+					lineType: 2, // continuation
+					sender:   senderName,
+					content:  wline,
+				})
 			}
-			allLines = append(allLines, messageLine{text: lineText, msgIdx: msgIdx})
 		}
 	}
 
@@ -1703,17 +1697,11 @@ func (m Model) renderMessages(maxHeight int) string {
 		viewportEnd = totalLines
 	}
 
-	// Cursor line style (highlighted background with full width)
-	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("237")).Width(m.width)
-
 	for i := viewportStart; i < viewportEnd; i++ {
 		line := allLines[i]
-		if i == cursorLine {
-			// Highlight cursor line with full-width background
-			visibleLines = append(visibleLines, cursorStyle.Render(line.text))
-		} else {
-			visibleLines = append(visibleLines, line.text)
-		}
+		isCursor := (i == cursorLine)
+		renderedLine := m.renderLine(line, contentWidth, isCursor)
+		visibleLines = append(visibleLines, renderedLine)
 	}
 
 	// Pad with empty lines if needed
@@ -1739,6 +1727,67 @@ func (m Model) renderMessages(maxHeight int) string {
 	visibleLines = append(visibleLines, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(scrollInfo))
 
 	return strings.Join(visibleLines, "\n")
+}
+
+// renderLine renders a single message line with appropriate styling
+func (m Model) renderLine(line messageLine, contentWidth int, isCursor bool) string {
+	// Base styles - cursor adds background to all
+	cursorBg := lipgloss.Color("237")
+
+	// Build styles based on cursor state
+	var senderStyle, ownSenderStyle, timeStyle, replyStyle, textStyle lipgloss.Style
+
+	if isCursor {
+		senderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Background(cursorBg)
+		ownSenderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")).Background(cursorBg)
+		timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Background(cursorBg)
+		replyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true).Background(cursorBg)
+		textStyle = lipgloss.NewStyle().Background(cursorBg)
+	} else {
+		senderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+		ownSenderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+		timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		replyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
+		textStyle = lipgloss.NewStyle()
+	}
+
+	var result string
+
+	switch line.lineType {
+	case 0: // Reply line
+		result = replyStyle.Render(line.content)
+
+	case 1: // First line with sender and timestamp
+		var styledSender string
+		if line.isOwn {
+			styledSender = ownSenderStyle.Render(line.sender)
+		} else {
+			styledSender = senderStyle.Render(line.sender)
+		}
+
+		// Calculate padding for right-aligned timestamp
+		baseLen := len(line.sender) + 2 + len(line.content)
+		padding := contentWidth - baseLen - len(line.timestamp)
+		if padding < 1 {
+			padding = 1
+		}
+
+		result = styledSender + textStyle.Render(": "+line.content+strings.Repeat(" ", padding)) + timeStyle.Render(line.timestamp)
+
+	case 2: // Continuation line
+		indent := strings.Repeat(" ", len(line.sender)+2)
+		result = textStyle.Render(indent + line.content)
+	}
+
+	// Pad to full width for cursor line
+	if isCursor {
+		lineWidth := lipgloss.Width(result)
+		if lineWidth < m.width {
+			result = result + textStyle.Render(strings.Repeat(" ", m.width-lineWidth))
+		}
+	}
+
+	return result
 }
 
 // getSenderName returns the appropriate sender name based on display toggle
