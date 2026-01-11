@@ -12,7 +12,6 @@ type Mode int
 const (
 	ModeNormal Mode = iota
 	ModeInsert
-	ModeSearch
 )
 
 func (m Mode) String() string {
@@ -21,8 +20,6 @@ func (m Mode) String() string {
 		return "NORMAL"
 	case ModeInsert:
 		return "INSERT"
-	case ModeSearch:
-		return "SEARCH"
 	default:
 		return "UNKNOWN"
 	}
@@ -52,7 +49,6 @@ const (
 
 	// Mode changes
 	ActionEnterInsert
-	ActionEnterSearch
 	ActionExitToNormal
 
 	// Actions
@@ -64,10 +60,6 @@ const (
 	ActionCancel
 	ActionQuit
 	ActionToggleUsername
-
-	// Search
-	ActionSearchNext
-	ActionSearchPrev
 )
 
 // Result holds the action and any associated count
@@ -123,8 +115,6 @@ func (v *VimState) ProcessKey(key string) Result {
 		return v.processNormalMode(key)
 	case ModeInsert:
 		return v.processInsertMode(key)
-	case ModeSearch:
-		return v.processSearchMode(key)
 	}
 
 	return Result{Action: ActionUnknown}
@@ -192,10 +182,6 @@ func (v *VimState) processNormalMode(key string) Result {
 		v.reset()
 		v.mode = ModeInsert
 		return Result{Action: ActionEnterInsert}
-	case "/":
-		v.reset()
-		v.mode = ModeSearch
-		return Result{Action: ActionEnterSearch}
 	case "r":
 		v.reset()
 		return Result{Action: ActionReply}
@@ -236,23 +222,6 @@ func (v *VimState) processInsertMode(key string) Result {
 		return Result{Action: ActionExitToNormal}
 	}
 	// In insert mode, pass through to text input
-	return Result{Action: ActionNone}
-}
-
-func (v *VimState) processSearchMode(key string) Result {
-	switch key {
-	case "esc", "escape":
-		v.reset()
-		v.mode = ModeNormal
-		return Result{Action: ActionExitToNormal}
-	case "enter":
-		v.reset()
-		return Result{Action: ActionSelect}
-	case "n":
-		return Result{Action: ActionSearchNext}
-	case "N":
-		return Result{Action: ActionSearchPrev}
-	}
 	return Result{Action: ActionNone}
 }
 

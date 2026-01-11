@@ -4,8 +4,9 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 
 ## Features
 
-- **Vim keybindings** - Navigate with hjkl, gg/G, Ctrl-d/u
+- **Vim keybindings** - Navigate with hjkl, gg/G, Ctrl-d/u, H/L
 - **Line-based cursor** - Move through messages line by line, handles wrapped text naturally
+- **Multi-line messages** - Compose multi-line messages with auto-expanding input
 - **CLI chat opening** - `tlgram --chat @username` or `tlgram --chat work`
 - **Multiple instances** - Run different chats in different tmux panes
 - **Fuzzy chat switcher** - Ctrl-p to search and switch chats (searches names and @usernames)
@@ -101,7 +102,6 @@ tlgram --version           # Show version
 | Key | Action |
 |-----|--------|
 | `i` | Enter INSERT mode (compose message) |
-| `/` | Enter SEARCH mode |
 | `Escape` | Return to NORMAL mode |
 
 #### Actions (NORMAL mode)
@@ -131,8 +131,11 @@ tlgram --version           # Show version
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send message (stays in INSERT mode for multiple messages) |
+| `Enter` | Insert newline (for multi-line messages) |
+| `Alt-Enter` | Send message (stays in INSERT mode) |
 | `Escape` | Exit to NORMAL mode |
+
+Note: The input area auto-expands as you type (up to 6 lines).
 
 ## Header Bar
 
@@ -166,7 +169,8 @@ api_id = 12345678
 api_hash = "your_api_hash"
 
 [general]
-send_key = "enter"  # or "ctrl-enter"
+# Send key: "ctrl-enter" (default, allows multi-line with Enter) or "enter"
+send_key = "ctrl-enter"
 download_dir = "~/Downloads/tlgram"
 auto_mark_read = true
 initial_message_count = 50
@@ -181,7 +185,6 @@ team = "-1001234567890"
 
 [keybindings]
 chat_switcher = "ctrl+p"
-search = "/"
 reply = "r"
 copy = "yy"
 download = "d"

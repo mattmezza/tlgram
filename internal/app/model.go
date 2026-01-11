@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -51,7 +52,7 @@ type Model struct {
 	// Sub-components
 	authView  auth.Model
 	statusBar statusbar.Model
-	input     textinput.Model
+	input     textarea.Model
 
 	// Telegram client (nil in demo mode)
 	telegramClient *telegram.Client
@@ -113,9 +114,12 @@ type Message struct {
 
 // New creates a new application model
 func New(cfg *config.Config, targetChat string) Model {
-	ti := textinput.New()
-	ti.Placeholder = "Type a message... (i to focus, Esc to blur)"
+	// Message input (multi-line textarea)
+	ti := textarea.New()
+	ti.Placeholder = "Type a message..."
 	ti.CharLimit = 4096
+	ti.SetHeight(1) // Start small, expands as user types
+	ti.ShowLineNumbers = false
 
 	// Switcher search input
 	switcherTi := textinput.New()
@@ -240,7 +244,7 @@ type chatSearchedMsg struct {
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tea.SetWindowTitle("tlgram"),
-		textinput.Blink,
+		textarea.Blink,
 	}
 
 	// If not in demo mode, start the Telegram client
@@ -295,7 +299,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.authView.SetSize(msg.Width, msg.Height)
 		m.statusBar.SetSize(msg.Width, 1)
-		m.input.Width = msg.Width - 4
+		m.input.SetWidth(msg.Width - 4)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1151,6 +1155,7 @@ func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd)
 		m.vim.SetMode(keybind.ModeNormal)
 		m.statusBar.SetMode(keybind.ModeNormal)
 		m.input.Blur()
+		m.input.SetHeight(1) // Reset to minimum height
 		m.replyingTo = nil
 		return m, nil
 	}
@@ -1185,7 +1190,37 @@ func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd)
 	// Forward to text input
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+
+	// Auto-expand textarea height based on content (max 6 lines)
+	m.adjustTextareaHeight()
+
 	return m, cmd
+}
+
+// adjustTextareaHeight adjusts textarea height based on content, up to maxHeight
+func (m *Model) adjustTextareaHeight() {
+	const minHeight = 1
+	const maxHeight = 6
+
+	content := m.input.Value()
+	if content == "" {
+		m.input.SetHeight(minHeight)
+		return
+	}
+
+	// Count newlines in content
+	lineCount := strings.Count(content, "\n") + 1
+
+	// Clamp to min/max
+	height := lineCount
+	if height < minHeight {
+		height = minHeight
+	}
+	if height > maxHeight {
+		height = maxHeight
+	}
+
+	m.input.SetHeight(height)
 }
 
 func (m Model) sendMessage() (Model, tea.Cmd) {
@@ -1208,6 +1243,7 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 
 	// Clear input and reply state
 	m.input.Reset()
+	m.input.SetHeight(1) // Reset to minimum height
 	replyingTo := m.replyingTo
 	m.replyingTo = nil
 
@@ -1587,9 +1623,12 @@ func formatRelativeTime(t time.Time) string {
 	case daysDiff < 7:
 		// Within a week
 		return fmt.Sprintf("%d days ago %s", daysDiff, t.Format("15:04"))
-	default:
-		// Older - show date
+	case t.Year() == now.Year():
+		// Same year - show date without year
 		return t.Format("2 Jan 15:04")
+	default:
+		// Different year - show full date with year
+		return t.Format("2 Jan 2006 15:04")
 	}
 }
 

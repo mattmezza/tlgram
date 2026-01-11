@@ -41,7 +41,6 @@ type AppearanceConfig struct {
 // KeybindingsConfig contains keybinding settings
 type KeybindingsConfig struct {
 	ChatSwitcher string `toml:"chat_switcher"`
-	Search       string `toml:"search"`
 	Reply        string `toml:"reply"`
 	Copy         string `toml:"copy"`
 	Download     string `toml:"download"`
@@ -90,7 +89,6 @@ func Default() *Config {
 		ChatAliases: make(map[string]string),
 		Keybindings: KeybindingsConfig{
 			ChatSwitcher: "ctrl+p",
-			Search:       "/",
 			Reply:        "r",
 			Copy:         "y",
 			Download:     "d",
@@ -247,7 +245,6 @@ author_display = "fullname"
 
 [keybindings]
 chat_switcher = "ctrl+p"
-search = "/"
 reply = "r"
 copy = "y"
 download = "d"

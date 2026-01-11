@@ -25,17 +25,19 @@ As a user familiar with vim, I want to use vim keybindings throughout the applic
 - `Ctrl-f` - Scroll down full page (optional)
 - `Ctrl-b` - Scroll up full page (optional)
 
-### AC-010.3: Search
-- `/` - Enter search mode (see FR-009)
+### AC-010.3: Search (DEFERRED)
+**STATUS: Not implemented in current version. See FR-009.**
+- `/` - Enter search mode
 - `n` - Next search match
 - `N` (Shift-n) - Previous search match
 - `Escape` - Exit search mode
 
-### AC-010.4: Command Mode
+### AC-010.4: Command Mode (DEFERRED)
+**STATUS: Not implemented in current version. Planned for future release.**
 - `:` - Enter command mode
 - Commands SHALL include:
   - `:q` or `:quit` - Quit application
-  - `:h` or `:help` - Show help (optional for v1)
+  - `:h` or `:help` - Show help
   - `:chat <name>` - Switch to chat (alternative to Ctrl-p)
 - `Escape` - Exit command mode without executing
 
@@ -53,18 +55,16 @@ As a user familiar with vim, I want to use vim keybindings throughout the applic
 - The application SHALL clearly indicate current mode:
   - **NORMAL** - Default mode, vim navigation active
   - **INSERT** - Composing message, text input active
-  - **SEARCH** - Search mode active
-  - **COMMAND** - Command mode active (after `:`)
 - Mode indicator SHALL be visible in status bar or dedicated area
+- Note: SEARCH and COMMAND modes are deferred (see AC-010.3, AC-010.4)
 
 ### AC-010.8: Mode Switching
 - In NORMAL mode:
-  - `/` enters SEARCH mode
-  - `:` enters COMMAND mode
   - `i` enters INSERT mode
-- In any other mode:
+- In INSERT mode:
   - `Escape` returns to NORMAL mode
-- Send keybinding (Enter or Ctrl-Enter) in INSERT mode sends message and stays in INSERT mode
+- Send keybinding (Alt-Enter, default) in INSERT mode sends message and stays in INSERT mode
+- Note: Multi-line messages supported via Enter key (inserts newline), Alt-Enter sends
 
 ### AC-010.9: Input Area Keybindings
 When in INSERT mode (composing message):
@@ -100,20 +100,23 @@ When in INSERT mode (composing message):
 | `k` / `↑` | NORMAL | Move up |
 | `h` / `←` | NORMAL | Move left |
 | `l` / `→` | NORMAL | Move right |
-| `gg` | NORMAL | Jump to top |
+| `gg` | NORMAL | Jump to top (loads older messages) |
 | `G` | NORMAL | Jump to bottom |
+| `H` | NORMAL | Move to top of viewport |
+| `L` | NORMAL | Move to bottom of viewport |
 | `Ctrl-d` | NORMAL | Scroll down half page |
 | `Ctrl-u` | NORMAL | Scroll up half page |
-| `/` | NORMAL | Enter search |
-| `n` | SEARCH | Next match |
-| `N` | SEARCH | Previous match |
-| `:` | NORMAL | Enter command mode |
+| `Ctrl-f` | NORMAL | Scroll down full page |
+| `Ctrl-b` | NORMAL | Scroll up full page |
 | `r` | NORMAL | Reply to message |
-| `y` | NORMAL | Yank/copy message |
+| `yy` | NORMAL | Yank/copy message |
+| `u` | NORMAL | Toggle fullname/@username display |
 | `i` | NORMAL | Enter insert mode |
 | `Ctrl-p` | NORMAL | Chat switcher |
-| `Escape` | ANY | Return to NORMAL |
-| `Enter` / `Ctrl-Enter` | INSERT | Send message |
+| `q` | NORMAL | Quit |
+| `Escape` | INSERT | Return to NORMAL |
+| `Enter` | INSERT | Insert newline |
+| `Alt-Enter` | INSERT | Send message |
 
 ## Technical Notes
 - Implement mode state machine
@@ -124,8 +127,8 @@ When in INSERT mode (composing message):
 ## Dependencies
 - FR-006: Reply to Messages (for 'r' key)
 - FR-008: Chat Switching (for Ctrl-p)
-- FR-009: Search Within Chat (for /, n, N)
-- FR-014: Copy Message Text (for 'y' key)
+- FR-009: Search Within Chat (DEFERRED - for /, n, N)
+- FR-014: Copy Message Text (for 'yy' key)
 
 ## Related Requirements
 - NFR-001: Performance (instant mode transitions)

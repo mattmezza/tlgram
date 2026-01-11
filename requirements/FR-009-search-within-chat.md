@@ -1,5 +1,7 @@
 # FR-009: Search Within Chat
 
+**STATUS: DEFERRED** - Not implemented in current version. Planned for future release.
+
 ## Description
 The application must provide the ability to search for specific messages within the currently open chat.
 
