@@ -66,10 +66,12 @@ func (s ConnectionState) String() string {
 // Chat represents a Telegram chat
 type Chat struct {
 	ID            int64
+	AccessHash    int64 // Required for channels/supergroups
 	Type          ChatType
 	Title         string
 	Username      string
 	UnreadCount   int
+	MemberCount   int
 	LastMessage   *Message
 	LastMessageAt time.Time
 }
@@ -104,18 +106,19 @@ func (t ChatType) String() string {
 
 // Message represents a Telegram message
 type Message struct {
-	ID            int64
-	ChatID        int64
-	SenderID      int64
-	SenderName    string
-	Text          string
-	FormattedText *FormattedText
-	Date          time.Time
-	IsOutgoing    bool
-	IsEdited      bool
-	ReplyToID     int64
-	ReplyTo       *Message
-	Media         *MediaInfo
+	ID             int64
+	ChatID         int64
+	SenderID       int64
+	SenderName     string
+	SenderUsername string
+	Text           string
+	FormattedText  *FormattedText
+	Date           time.Time
+	IsOutgoing     bool
+	IsEdited       bool
+	ReplyToID      int64
+	ReplyTo        *Message
+	Media          *MediaInfo
 }
 
 // FormattedText represents text with formatting entities

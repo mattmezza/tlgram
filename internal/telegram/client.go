@@ -357,10 +357,15 @@ func (c *Client) handleShortMessage(u *tg.UpdateShortMessage) {
 	if user, ok := c.users[int64(u.UserID)]; ok {
 		msg.SenderName = user.FullName()
 	}
+	isMe := c.me != nil && int64(u.UserID) == c.me.ID
 	c.mu.RUnlock()
 
 	if msg.SenderName == "" {
-		msg.SenderName = fmt.Sprintf("User %d", u.UserID)
+		if msg.IsOutgoing || isMe {
+			msg.SenderName = "You"
+		} else {
+			msg.SenderName = fmt.Sprintf("User %d", u.UserID)
+		}
 	}
 
 	c.sendUpdate(NewMessageUpdate{Message: msg})
@@ -381,10 +386,15 @@ func (c *Client) handleShortChatMessage(u *tg.UpdateShortChatMessage) {
 	if user, ok := c.users[int64(u.FromID)]; ok {
 		msg.SenderName = user.FullName()
 	}
+	isMe := c.me != nil && int64(u.FromID) == c.me.ID
 	c.mu.RUnlock()
 
 	if msg.SenderName == "" {
-		msg.SenderName = fmt.Sprintf("User %d", u.FromID)
+		if msg.IsOutgoing || isMe {
+			msg.SenderName = "You"
+		} else {
+			msg.SenderName = fmt.Sprintf("User %d", u.FromID)
+		}
 	}
 
 	c.sendUpdate(NewMessageUpdate{Message: msg})
@@ -859,11 +869,11 @@ func (c *Client) getInputPeer(chatID int64) tg.InputPeerClass {
 
 	switch chat.Type {
 	case ChatTypePrivate:
-		return &tg.InputPeerUser{UserID: chatID}
+		return &tg.InputPeerUser{UserID: chatID, AccessHash: chat.AccessHash}
 	case ChatTypeGroup:
 		return &tg.InputPeerChat{ChatID: chatID}
 	case ChatTypeSupergroup, ChatTypeChannel:
-		return &tg.InputPeerChannel{ChannelID: chatID}
+		return &tg.InputPeerChannel{ChannelID: chatID, AccessHash: chat.AccessHash}
 	default:
 		return &tg.InputPeerUser{UserID: chatID}
 	}
@@ -899,6 +909,9 @@ func (c *Client) convertMessage(msg *tg.Message) *Message {
 			c.mu.RLock()
 			if user, ok := c.users[from.UserID]; ok {
 				m.SenderName = user.FullName()
+				if user.Username != "" {
+					m.SenderUsername = "@" + user.Username
+				}
 			}
 			c.mu.RUnlock()
 		case *tg.PeerChat:
@@ -906,13 +919,55 @@ func (c *Client) convertMessage(msg *tg.Message) *Message {
 		case *tg.PeerChannel:
 			m.SenderID = from.ChannelID
 		}
+	} else {
+		// FromID is nil - for private chats, sender is the peer user (if not outgoing)
+		if !msg.Out {
+			if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
+				m.SenderID = peerUser.UserID
+				c.mu.RLock()
+				if user, ok := c.users[peerUser.UserID]; ok {
+					m.SenderName = user.FullName()
+					if user.Username != "" {
+						m.SenderUsername = "@" + user.Username
+					}
+				}
+				c.mu.RUnlock()
+			}
+		}
 	}
 
 	if m.SenderName == "" {
-		if m.IsOutgoing {
-			m.SenderName = "You"
-		} else {
-			m.SenderName = fmt.Sprintf("User %d", m.SenderID)
+		// Check if it's our own message (either outgoing or sender is current user)
+		c.mu.RLock()
+		isMe := c.me != nil && m.SenderID == c.me.ID
+		// Also try to get the sender name from cache if we have a sender ID
+		if !isMe && m.SenderID != 0 {
+			if user, ok := c.users[m.SenderID]; ok {
+				m.SenderName = user.FullName()
+				if user.Username != "" {
+					m.SenderUsername = "@" + user.Username
+				}
+			}
+		}
+		// For private chats, try to get name from chat cache as fallback
+		if m.SenderName == "" && !isMe && m.ChatID != 0 {
+			if chat, ok := c.chats[m.ChatID]; ok && chat.Type == ChatTypePrivate {
+				m.SenderName = chat.Title
+				if chat.Username != "" {
+					m.SenderUsername = "@" + chat.Username
+				}
+			}
+		}
+		c.mu.RUnlock()
+
+		if m.SenderName == "" {
+			if m.IsOutgoing || isMe {
+				m.SenderName = "You"
+			} else if m.SenderID != 0 {
+				m.SenderName = fmt.Sprintf("User %d", m.SenderID)
+			} else {
+				m.SenderName = "Unknown"
+			}
 		}
 	}
 
@@ -997,10 +1052,11 @@ func (c *Client) convertUserToChat(user *tg.User) *Chat {
 		name += " " + user.LastName
 	}
 	return &Chat{
-		ID:       user.ID,
-		Type:     ChatTypePrivate,
-		Title:    name,
-		Username: user.Username,
+		ID:         user.ID,
+		AccessHash: user.AccessHash,
+		Type:       ChatTypePrivate,
+		Title:      name,
+		Username:   user.Username,
 	}
 }
 
@@ -1018,10 +1074,11 @@ func (c *Client) convertChatClass(ch tg.ChatClass) *Chat {
 			chatType = ChatTypeChannel
 		}
 		return &Chat{
-			ID:       chat.ID,
-			Type:     chatType,
-			Title:    chat.Title,
-			Username: chat.Username,
+			ID:         chat.ID,
+			AccessHash: chat.AccessHash,
+			Type:       chatType,
+			Title:      chat.Title,
+			Username:   chat.Username,
 		}
 	case *tg.ChatForbidden:
 		return &Chat{
@@ -1031,9 +1088,10 @@ func (c *Client) convertChatClass(ch tg.ChatClass) *Chat {
 		}
 	case *tg.ChannelForbidden:
 		return &Chat{
-			ID:    chat.ID,
-			Type:  ChatTypeChannel,
-			Title: chat.Title,
+			ID:         chat.ID,
+			AccessHash: chat.AccessHash,
+			Type:       ChatTypeChannel,
+			Title:      chat.Title,
 		}
 	}
 	return nil

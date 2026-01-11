@@ -157,18 +157,25 @@ func (m Model) handleSubmit() (Model, tea.Cmd) {
 
 // View implements tea.Model
 func (m Model) View() string {
+	var content string
 	switch m.state {
 	case telegram.AuthStateWaitPhoneNumber:
-		return m.viewPhoneInput()
+		content = m.viewPhoneInput()
 	case telegram.AuthStateWaitCode:
-		return m.viewCodeInput()
+		content = m.viewCodeInput()
 	case telegram.AuthStateWaitPassword:
-		return m.viewPasswordInput()
+		content = m.viewPasswordInput()
 	case telegram.AuthStateReady:
-		return m.viewReady()
+		content = m.viewReady()
 	default:
-		return m.viewLoading()
+		content = m.viewLoading()
 	}
+
+	// Center the content in the screen
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	}
+	return content
 }
 
 func (m Model) viewPhoneInput() string {

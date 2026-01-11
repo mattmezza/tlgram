@@ -1,6 +1,7 @@
 package statusbar
 
 import (
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,6 +43,9 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("252"))
 
+	chatInfoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+
 	connectedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42"))
 
@@ -56,6 +60,12 @@ var (
 
 	notificationStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214"))
+
+	unreadStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("196")).
+			Foreground(lipgloss.Color("255")).
+			Bold(true).
+			Padding(0, 1)
 )
 
 // Model represents the status bar
@@ -63,9 +73,13 @@ type Model struct {
 	width  int
 	height int
 
-	mode       keybind.Mode
-	chatName   string
-	connState  telegram.ConnectionState
+	mode         keybind.Mode
+	chatName     string
+	chatUsername string
+	chatType     telegram.ChatType
+	memberCount  int
+	unreadCount  int
+	connState    telegram.ConnectionState
 	notification string
 	notifyUntil  time.Time
 }
@@ -95,16 +109,30 @@ func (m *Model) SetChatName(name string) {
 	m.chatName = name
 }
 
+// SetChatInfo sets the full chat info for display
+func (m *Model) SetChatInfo(name, username string, chatType telegram.ChatType, memberCount, unreadCount int) {
+	m.chatName = name
+	m.chatUsername = username
+	m.chatType = chatType
+	m.memberCount = memberCount
+	m.unreadCount = unreadCount
+}
+
+// SetUnreadCount updates just the unread count
+func (m *Model) SetUnreadCount(count int) {
+	m.unreadCount = count
+}
+
 // SetConnectionState sets the connection state
 func (m *Model) SetConnectionState(state telegram.ConnectionState) {
 	m.connState = state
 }
 
-// ShowNotification displays a temporary notification
-func (m *Model) ShowNotification(text string, duration time.Duration) tea.Cmd {
+// ShowNotification displays a temporary notification and returns the updated model and command
+func (m Model) ShowNotification(text string, duration time.Duration) (Model, tea.Cmd) {
 	m.notification = text
 	m.notifyUntil = time.Now().Add(duration)
-	return tea.Tick(duration, func(t time.Time) tea.Msg {
+	return m, tea.Tick(duration, func(t time.Time) tea.Msg {
 		return ClearNotificationMsg{}
 	})
 }
@@ -145,14 +173,39 @@ func (m Model) View() string {
 		modeView = modeNormalStyle.Render("NORMAL")
 	}
 
-	// Chat name
-	chatView := chatNameStyle.Render(m.chatName)
+	// Build chat info based on type
+	var chatView string
+	switch m.chatType {
+	case telegram.ChatTypePrivate:
+		// DM: Name Surname @username
+		chatView = chatNameStyle.Render(m.chatName)
+		if m.chatUsername != "" {
+			chatView += " " + chatInfoStyle.Render("@"+m.chatUsername)
+		}
+	case telegram.ChatTypeGroup, telegram.ChatTypeSupergroup:
+		// Group: Group name (x members)
+		chatView = chatNameStyle.Render(m.chatName)
+		if m.memberCount > 0 {
+			chatView += " " + chatInfoStyle.Render(fmt.Sprintf("(%d members)", m.memberCount))
+		}
+	case telegram.ChatTypeChannel:
+		// Channel: Channel name (x subscribers)
+		chatView = chatNameStyle.Render(m.chatName)
+		if m.memberCount > 0 {
+			chatView += " " + chatInfoStyle.Render(fmt.Sprintf("(%d subscribers)", m.memberCount))
+		}
+	default:
+		chatView = chatNameStyle.Render(m.chatName)
+	}
 
-	// Connection state or notification
+	// Build right side: unread indicator, notification, or connection state
 	var rightView string
+
+	// Check for notification first
 	if m.notification != "" && time.Now().Before(m.notifyUntil) {
 		rightView = notificationStyle.Render(m.notification)
 	} else {
+		// Show connection state
 		switch m.connState {
 		case telegram.ConnectionStateReady:
 			rightView = connectedStyle.Render("Connected")
@@ -165,6 +218,12 @@ func (m Model) View() string {
 		default:
 			rightView = connectingStyle.Render("...")
 		}
+	}
+
+	// Add unread indicator if there are unread messages
+	if m.unreadCount > 0 {
+		unreadBadge := unreadStyle.Render(fmt.Sprintf("%d new", m.unreadCount))
+		rightView = unreadBadge + " " + rightView
 	}
 
 	// Calculate spacing

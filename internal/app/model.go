@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -70,6 +71,15 @@ type Model struct {
 	// Reply state
 	replyingTo *Message
 
+	// Cursor state (line-based navigation)
+	cursorLine int // Which visual line the cursor is on (0-indexed)
+
+	// Display preferences
+	showUsernames bool // Toggle between full name and @username
+
+	// Loading state
+	loadingMore bool
+
 	// Error state
 	lastError string
 }
@@ -77,20 +87,24 @@ type Model struct {
 // Chat represents a chat in the list
 type Chat struct {
 	ID          int64
+	Type        telegram.ChatType
 	Name        string
+	Username    string
 	UnreadCount int
+	MemberCount int
 	LastMessage string
 	LastTime    time.Time
 }
 
 // Message represents a chat message
 type Message struct {
-	ID         int64
-	Sender     string
-	Text       string
-	IsOwn      bool
-	Time       time.Time
-	ReplyToMsg *Message
+	ID             int64
+	Sender         string // Full name
+	SenderUsername string // @username (may be empty)
+	Text           string
+	IsOwn          bool
+	Time           time.Time
+	ReplyToMsg     *Message
 }
 
 // New creates a new application model
@@ -163,7 +177,7 @@ func (m *Model) loadDemoData() {
 
 	// Demo messages for current chat
 	if m.currentChat != nil {
-		m.statusBar.SetChatName(m.currentChat.Name)
+		m.updateStatusBarForChat()
 		m.messages = []*Message{
 			{ID: 1, Sender: "john_doe", Text: "Hey!", IsOwn: false, Time: time.Now().Add(-10 * time.Minute)},
 			{ID: 2, Sender: "You", Text: "Hi John! What's up?", IsOwn: true, Time: time.Now().Add(-9 * time.Minute)},
@@ -196,6 +210,10 @@ type messagesLoadedMsg struct {
 	messages []*Message
 }
 
+type moreMessagesLoadedMsg struct {
+	messages []*Message
+}
+
 type messageSentMsg struct {
 	message *Message
 }
@@ -206,6 +224,11 @@ type clientStartedMsg struct {
 
 type clientErrorMsg struct {
 	err error
+}
+
+type chatSearchedMsg struct {
+	chat *Chat
+	err  error
 }
 
 // Init implements tea.Model
@@ -340,16 +363,96 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatsLoadedMsg:
 		m.chats = msg.chats
+
+		// If targetChat is specified, try to find and open it
+		if m.targetChat != "" {
+			resolved := m.config.ResolveAlias(m.targetChat)
+			// Remove @ prefix if present for comparison
+			searchName := strings.TrimPrefix(resolved, "@")
+
+			for i, chat := range m.chats {
+				chatUsername := strings.TrimPrefix(chat.Name, "@")
+				if strings.EqualFold(chatUsername, searchName) ||
+					strings.EqualFold(chat.Name, resolved) {
+					m.chatIdx = i
+					m.currentChat = chat
+					m.currentView = ViewChat
+					m.updateStatusBarForChat()
+					m.input.Blur()
+					m.vim.SetMode(keybind.ModeNormal)
+					m.statusBar.SetMode(keybind.ModeNormal)
+					return m, m.loadMessages(chat.ID)
+				}
+			}
+			// Chat not found in dialogs, try to search for it
+			return m, m.searchAndOpenChat(resolved)
+		}
+
+		// No targetChat - stay in switcher mode, set first chat as fallback
 		if len(m.chats) > 0 {
 			m.currentChat = m.chats[0]
-			m.statusBar.SetChatName(m.currentChat.Name)
+			m.updateStatusBarForChat()
 		}
+		// Focus the switcher input
+		m.switcherInput.Focus()
 		return m, nil
 
 	case messagesLoadedMsg:
-		m.messages = msg.messages
+		// Merge instead of replace: keep any messages newer than what was loaded
+		// This prevents losing messages that arrived via updates while loading
+		if len(m.messages) > 0 && len(msg.messages) > 0 {
+			// Find the highest ID in the loaded messages
+			maxLoadedID := msg.messages[len(msg.messages)-1].ID
+
+			// Keep messages from current array that are newer (higher ID)
+			var newerMessages []*Message
+			for _, existing := range m.messages {
+				if existing.ID > maxLoadedID {
+					newerMessages = append(newerMessages, existing)
+				}
+			}
+
+			// Merge: loaded messages + newer messages
+			if len(newerMessages) > 0 {
+				m.messages = append(msg.messages, newerMessages...)
+			} else {
+				m.messages = msg.messages
+			}
+		} else {
+			m.messages = msg.messages
+		}
+
 		if len(m.messages) > 0 {
 			m.selectedIdx = len(m.messages) - 1
+			// Set cursor to last line (bottom of chat)
+			m.cursorLine = m.getTotalLines() - 1
+			if m.cursorLine < 0 {
+				m.cursorLine = 0
+			}
+		}
+		return m, nil
+
+	case moreMessagesLoadedMsg:
+		m.loadingMore = false
+		if len(msg.messages) > 0 {
+			// Calculate lines added by new messages before prepending
+			contentWidth := m.width - 4
+			if contentWidth < 40 {
+				contentWidth = 40
+			}
+			linesAdded := 0
+			for _, newMsg := range msg.messages {
+				if newMsg.ReplyToMsg != nil {
+					linesAdded++
+				}
+				wrappedLines := wrapText(newMsg.Text, contentWidth-len(newMsg.Sender)-4)
+				linesAdded += len(wrappedLines)
+			}
+
+			// Prepend older messages
+			m.messages = append(msg.messages, m.messages...)
+			// Adjust cursorLine to keep viewing the same content
+			m.cursorLine += linesAdded
 		}
 		return m, nil
 
@@ -357,12 +460,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar, _ = m.statusBar.Update(msg)
 		return m, nil
 
+	case chatSearchedMsg:
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("Chat not found: %s", msg.err.Error())
+			// Stay in switcher mode
+			return m, nil
+		}
+		if msg.chat != nil {
+			// Add to chats if not already present
+			found := false
+			for i, c := range m.chats {
+				if c.ID == msg.chat.ID {
+					m.chatIdx = i
+					found = true
+					break
+				}
+			}
+			if !found {
+				m.chats = append([]*Chat{msg.chat}, m.chats...)
+				m.chatIdx = 0
+			}
+			m.currentChat = msg.chat
+			m.currentView = ViewChat
+			m.updateStatusBarForChat()
+			m.input.Blur()
+			m.vim.SetMode(keybind.ModeNormal)
+			m.statusBar.SetMode(keybind.ModeNormal)
+			return m, m.loadMessages(msg.chat.ID)
+		}
+		return m, nil
+
 	case messageSentMsg:
 		// Add the sent message to the list
 		m.messages = append(m.messages, msg.message)
 		m.selectedIdx = len(m.messages) - 1
-		cmds = append(cmds, m.statusBar.ShowNotification("Sent!", 2*time.Second))
+		// Scroll cursor to the sent message (last line)
+		m.cursorLine = m.getTotalLines() - 1
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		var cmd tea.Cmd
+		m.statusBar, cmd = m.statusBar.ShowNotification("Sent!", 2*time.Second)
+		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
+
+	case clipboardResultMsg:
+		var cmd tea.Cmd
+		if msg.success {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Copied!", 2*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Copy failed: "+msg.err, 2*time.Second)
+		}
+		return m, cmd
 	}
 
 	return m, tea.Batch(cmds...)
@@ -381,10 +530,28 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 		// Convert and add new message if it's for the current chat
 		if m.currentChat != nil && u.Message.ChatID == m.currentChat.ID {
 			msg := convertTelegramMessage(u.Message)
-			m.messages = append(m.messages, msg)
-			// Auto-scroll if at bottom
-			if m.selectedIdx >= len(m.messages)-2 {
-				m.selectedIdx = len(m.messages) - 1
+
+			// Check for duplicate message ID
+			isDuplicate := false
+			for _, existing := range m.messages {
+				if existing.ID == msg.ID {
+					isDuplicate = true
+					break
+				}
+			}
+
+			if !isDuplicate {
+				// Check if cursor is at the bottom before adding message
+				totalLinesBefore := m.getTotalLines()
+				wasAtBottom := m.cursorLine >= totalLinesBefore-1
+
+				m.messages = append(m.messages, msg)
+
+				// Only auto-scroll if cursor was already at the bottom
+				if wasAtBottom {
+					m.cursorLine = m.getTotalLines() - 1
+				}
+				// If not at bottom, cursor stays where it is (new messages appear below)
 			}
 		}
 		return m, nil
@@ -438,8 +605,10 @@ func (m Model) handleAuthStateUpdate(u telegram.AuthStateUpdate) (Model, tea.Cmd
 		m.authView.SetState(telegram.AuthStateWaitPassword)
 
 	case telegram.AuthStateReady:
-		// Authentication complete, load chats
-		m.currentView = ViewChatList
+		// Authentication complete, load chats and go to switcher
+		m.currentView = ViewSwitcher
+		m.switcherInput.Focus()
+		m.switcherIdx = 0
 		m.statusBar.SetConnectionState(telegram.ConnectionStateReady)
 		return m, m.loadChats()
 	}
@@ -487,11 +656,51 @@ func (m Model) loadMessages(chatID int64) tea.Cmd {
 	}
 }
 
+func (m Model) loadMoreMessages() tea.Cmd {
+	if m.telegramClient == nil || m.currentChat == nil || len(m.messages) == 0 {
+		return nil
+	}
+
+	// Get the oldest message ID to load messages before it
+	oldestMsgID := m.messages[0].ID
+	chatID := m.currentChat.ID
+
+	return func() tea.Msg {
+		messages, err := m.telegramClient.GetChatHistory(chatID, oldestMsgID, 50)
+		if err != nil {
+			return clientErrorMsg{err: err}
+		}
+
+		result := make([]*Message, len(messages))
+		for i, msg := range messages {
+			result[i] = convertTelegramMessage(msg)
+		}
+
+		return moreMessagesLoadedMsg{messages: result}
+	}
+}
+
+func (m Model) searchAndOpenChat(username string) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	// Remove @ prefix if present
+	username = strings.TrimPrefix(username, "@")
+
+	return func() tea.Msg {
+		chat, err := m.telegramClient.SearchPublicChat(username)
+		if err != nil {
+			return chatSearchedMsg{err: err}
+		}
+		return chatSearchedMsg{chat: convertTelegramChat(chat)}
+	}
+}
+
 func convertTelegramChat(c *telegram.Chat) *Chat {
 	name := c.Title
-	if c.Username != "" {
-		name = "@" + c.Username
-	}
+	// For private chats, use the title (full name) as the primary name
+	// For other chats, also use the title
 
 	lastMsg := ""
 	var lastTime time.Time
@@ -502,8 +711,11 @@ func convertTelegramChat(c *telegram.Chat) *Chat {
 
 	return &Chat{
 		ID:          c.ID,
+		Type:        c.Type,
 		Name:        name,
+		Username:    c.Username,
 		UnreadCount: c.UnreadCount,
+		MemberCount: c.MemberCount,
 		LastMessage: lastMsg,
 		LastTime:    lastTime,
 	}
@@ -516,12 +728,35 @@ func convertTelegramMessage(m *telegram.Message) *Message {
 	}
 
 	return &Message{
-		ID:     m.ID,
-		Sender: sender,
-		Text:   m.Text,
-		IsOwn:  m.IsOutgoing,
-		Time:   m.Date,
+		ID:             m.ID,
+		Sender:         sender,
+		SenderUsername: m.SenderUsername,
+		Text:           m.Text,
+		IsOwn:          m.IsOutgoing,
+		Time:           m.Date,
 	}
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// updateStatusBarForChat updates the status bar with the current chat info
+func (m *Model) updateStatusBarForChat() {
+	if m.currentChat == nil {
+		m.statusBar.SetChatName("tlgram")
+		return
+	}
+	m.statusBar.SetChatInfo(
+		m.currentChat.Name,
+		m.currentChat.Username,
+		m.currentChat.Type,
+		m.currentChat.MemberCount,
+		m.currentChat.UnreadCount,
+	)
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -612,11 +847,67 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.chatIdx = len(m.chats) - 1
 		}
 
+	case keybind.ActionPageDown:
+		pageSize := m.height - 8
+		if pageSize < 1 {
+			pageSize = 10
+		}
+		for i := 0; i < pageSize*result.Count; i++ {
+			if m.chatIdx < len(m.chats)-1 {
+				m.chatIdx++
+			}
+		}
+
+	case keybind.ActionPageUp:
+		pageSize := m.height - 8
+		if pageSize < 1 {
+			pageSize = 10
+		}
+		for i := 0; i < pageSize*result.Count; i++ {
+			if m.chatIdx > 0 {
+				m.chatIdx--
+			}
+		}
+
+	case keybind.ActionHalfPageDown:
+		pageSize := (m.height - 8) / 2
+		if pageSize < 1 {
+			pageSize = 5
+		}
+		for i := 0; i < pageSize*result.Count; i++ {
+			if m.chatIdx < len(m.chats)-1 {
+				m.chatIdx++
+			}
+		}
+
+	case keybind.ActionHalfPageUp:
+		pageSize := (m.height - 8) / 2
+		if pageSize < 1 {
+			pageSize = 5
+		}
+		for i := 0; i < pageSize*result.Count; i++ {
+			if m.chatIdx > 0 {
+				m.chatIdx--
+			}
+		}
+
 	case keybind.ActionSelect:
 		if len(m.chats) > 0 {
 			m.currentChat = m.chats[m.chatIdx]
 			m.currentView = ViewChat
-			m.statusBar.SetChatName(m.currentChat.Name)
+			m.updateStatusBarForChat()
+
+			// Reset input state for new chat
+			m.input.Reset()
+			m.input.Blur()
+			m.replyingTo = nil
+			m.vim.SetMode(keybind.ModeNormal)
+			m.statusBar.SetMode(keybind.ModeNormal)
+			m.selectedIdx = 0
+
+			// Clear messages and reset cursor for new chat
+			m.messages = nil
+			m.cursorLine = 0
 
 			if m.demoMode {
 				m.loadDemoData()
@@ -645,7 +936,13 @@ func (m Model) getFilteredChats() []*Chat {
 
 	var filtered []*Chat
 	for _, chat := range m.chats {
+		// Search by name
 		if strings.Contains(strings.ToLower(chat.Name), query) {
+			filtered = append(filtered, chat)
+			continue
+		}
+		// Also search by username for DMs
+		if chat.Username != "" && strings.Contains(strings.ToLower(chat.Username), query) {
 			filtered = append(filtered, chat)
 		}
 	}
@@ -672,41 +969,93 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case keybind.ActionMoveDown:
-		for i := 0; i < result.Count; i++ {
-			if m.selectedIdx < len(m.messages)-1 {
-				m.selectedIdx++
-			}
+		// Move cursor down by lines
+		totalLines := m.getTotalLines()
+		m.cursorLine += result.Count
+		if m.cursorLine >= totalLines {
+			m.cursorLine = totalLines - 1
+		}
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
 		}
 
 	case keybind.ActionMoveUp:
-		for i := 0; i < result.Count; i++ {
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
-			}
+		// Move cursor up by lines
+		m.cursorLine -= result.Count
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		// Load more messages when reaching the top
+		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
+			m.loadingMore = true
+			return m, m.loadMoreMessages()
 		}
 
 	case keybind.ActionJumpTop:
-		m.selectedIdx = 0
+		m.cursorLine = 0
+		// Load more messages when jumping to top
+		if !m.loadingMore && !m.demoMode {
+			m.loadingMore = true
+			return m, m.loadMoreMessages()
+		}
 
 	case keybind.ActionJumpBottom:
-		if len(m.messages) > 0 {
-			m.selectedIdx = len(m.messages) - 1
+		// Jump to last line
+		totalLines := m.getTotalLines()
+		if totalLines > 0 {
+			m.cursorLine = totalLines - 1
 		}
 
 	case keybind.ActionHalfPageDown:
 		pageSize := (m.height - 6) / 2
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.selectedIdx < len(m.messages)-1 {
-				m.selectedIdx++
-			}
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		totalLines := m.getTotalLines()
+		m.cursorLine += pageSize * result.Count
+		if m.cursorLine >= totalLines {
+			m.cursorLine = totalLines - 1
 		}
 
 	case keybind.ActionHalfPageUp:
 		pageSize := (m.height - 6) / 2
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
-			}
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		m.cursorLine -= pageSize * result.Count
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		// Load more messages when reaching the top
+		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
+			m.loadingMore = true
+			return m, m.loadMoreMessages()
+		}
+
+	case keybind.ActionPageDown:
+		pageSize := m.height - 6
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		totalLines := m.getTotalLines()
+		m.cursorLine += pageSize * result.Count
+		if m.cursorLine >= totalLines {
+			m.cursorLine = totalLines - 1
+		}
+
+	case keybind.ActionPageUp:
+		pageSize := m.height - 6
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		m.cursorLine -= pageSize * result.Count
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		// Load more messages when reaching the top
+		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
+			m.loadingMore = true
+			return m, m.loadMoreMessages()
 		}
 
 	case keybind.ActionEnterInsert:
@@ -714,22 +1063,42 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.input.Focus()
 
 	case keybind.ActionReply:
-		if len(m.messages) > 0 && m.selectedIdx < len(m.messages) {
-			m.replyingTo = m.messages[m.selectedIdx]
+		// Reply to message at cursor position
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx >= 0 && msgIdx < len(m.messages) {
+			m.replyingTo = m.messages[msgIdx]
 			m.vim.SetMode(keybind.ModeInsert)
 			m.statusBar.SetMode(keybind.ModeInsert)
 			return m, m.input.Focus()
 		}
 
 	case keybind.ActionCopy:
-		if len(m.messages) > 0 && m.selectedIdx < len(m.messages) {
-			// In a real app, copy to clipboard
-			return m, m.statusBar.ShowNotification("Copied!", 2*time.Second)
+		// Copy message at cursor to clipboard
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx >= 0 && msgIdx < len(m.messages) {
+			msg := m.messages[msgIdx]
+			if msg.Text != "" {
+				// Copy to clipboard using xclip (Linux)
+				return m, m.copyToClipboard(msg.Text)
+			}
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("Cannot copy: no text", 2*time.Second)
+			return m, cmd
 		}
 
 	case keybind.ActionOpenSwitcher:
 		m.prevView = m.currentView
 		m.currentView = ViewSwitcher
+
+	case keybind.ActionToggleUsername:
+		m.showUsernames = !m.showUsernames
+		var cmd tea.Cmd
+		if m.showUsernames {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Showing @usernames", 1*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Showing full names", 1*time.Second)
+		}
+		return m, cmd
 
 	case keybind.ActionExitToNormal:
 		m.input.Blur()
@@ -742,25 +1111,40 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
-	// Check for send key
-	shouldSend := false
-	if m.config.General.SendKey == "enter" && key == "enter" {
-		shouldSend = true
-	} else if m.config.General.SendKey == "ctrl-enter" && key == "ctrl+enter" {
-		shouldSend = true
-	}
-
-	if shouldSend {
-		return m.sendMessage()
-	}
-
-	// Check for escape
+	// Check for escape first
 	if key == "esc" || key == "escape" {
 		m.vim.SetMode(keybind.ModeNormal)
 		m.statusBar.SetMode(keybind.ModeNormal)
 		m.input.Blur()
 		m.replyingTo = nil
 		return m, nil
+	}
+
+	// Check for send key
+	shouldSend := false
+	sendKey := m.config.General.SendKey
+
+	// Handle "enter" send key
+	if sendKey == "enter" && (key == "enter" || msg.Type == tea.KeyEnter) {
+		shouldSend = true
+	}
+
+	// Handle "ctrl-enter" send key
+	// Note: Ctrl+Enter is not consistently supported across terminals
+	// Check for various representations
+	if sendKey == "ctrl-enter" || sendKey == "ctrl+enter" {
+		// Check string representation
+		if key == "ctrl+enter" || key == "ctrl-enter" {
+			shouldSend = true
+		}
+		// Also check if it's Enter with Alt modifier (some terminals send this)
+		if msg.Type == tea.KeyEnter && msg.Alt {
+			shouldSend = true
+		}
+	}
+
+	if shouldSend && strings.TrimSpace(m.input.Value()) != "" {
+		return m.sendMessage()
 	}
 
 	// Forward to text input
@@ -773,6 +1157,13 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return m, nil
+	}
+
+	// Safety check
+	if m.currentChat == nil {
+		var cmd tea.Cmd
+		m.statusBar, cmd = m.statusBar.ShowNotification("No chat selected", 2*time.Second)
+		return m, cmd
 	}
 
 	var replyToID int64
@@ -839,10 +1230,22 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(filtered) > 0 && m.switcherIdx < len(filtered) {
 			m.currentChat = filtered[m.switcherIdx]
 			m.currentView = ViewChat
-			m.statusBar.SetChatName(m.currentChat.Name)
+			m.updateStatusBarForChat()
 			m.switcherInput.Reset()
 			m.switcherFiltered = nil
 			m.switcherIdx = 0
+
+			// Reset input state for new chat
+			m.input.Reset()
+			m.input.Blur()
+			m.replyingTo = nil
+			m.vim.SetMode(keybind.ModeNormal)
+			m.statusBar.SetMode(keybind.ModeNormal)
+			m.selectedIdx = 0
+
+			// Clear messages and reset cursor for new chat
+			m.messages = nil
+			m.cursorLine = 0
 
 			// Find the index in the main chat list
 			for i, c := range m.chats {
@@ -860,14 +1263,14 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "down", "ctrl+n":
+	case "ctrl+n":
 		filtered := m.getFilteredChats()
 		if m.switcherIdx < len(filtered)-1 {
 			m.switcherIdx++
 		}
 		return m, nil
 
-	case "up", "ctrl+p":
+	case "ctrl+p":
 		if m.switcherIdx > 0 {
 			m.switcherIdx--
 		}
@@ -895,24 +1298,15 @@ func (m Model) View() string {
 		return "Goodbye!\n"
 	}
 
-	// Debug: show current view
-	viewName := map[View]string{
-		ViewAuth:     "AUTH",
-		ViewChatList: "CHATLIST",
-		ViewChat:     "CHAT",
-		ViewSwitcher: "SWITCHER",
-	}[m.currentView]
-	debugLine := fmt.Sprintf("[%s | chats:%d | idx:%d]", viewName, len(m.chats), m.chatIdx)
-
 	switch m.currentView {
 	case ViewAuth:
 		return m.viewAuth()
 	case ViewChatList:
-		return m.viewChatList() + "\n" + debugLine
+		return m.viewChatList()
 	case ViewChat:
-		return m.viewChat() + "\n" + debugLine
+		return m.viewChat()
 	case ViewSwitcher:
-		return m.viewSwitcher() + "\n" + debugLine
+		return m.viewSwitcher()
 	}
 
 	return "Unknown view"
@@ -1049,11 +1443,20 @@ func (m Model) viewChat() string {
 }
 
 func (m Model) viewSwitcher() string {
+	// Box width is about 60% of screen width, min 40, max 80
+	boxWidth := m.width * 60 / 100
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	if boxWidth > 80 {
+		boxWidth = 80
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("39")).
 		Padding(1, 2).
-		Width(m.width - 4)
+		Width(boxWidth)
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -1089,6 +1492,7 @@ func (m Model) viewSwitcher() string {
 		content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("No matching chats"))
 		content.WriteString("\n")
 	} else {
+		usernameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 		for i := start; i < end; i++ {
 			chat := filtered[i]
 			style := lipgloss.NewStyle()
@@ -1103,15 +1507,54 @@ func (m Model) viewSwitcher() string {
 				unread = fmt.Sprintf(" (%d)", chat.UnreadCount)
 			}
 
-			content.WriteString(style.Render(prefix + chat.Name + unread))
+			// For DMs, also show username
+			displayName := chat.Name
+			if chat.Type == telegram.ChatTypePrivate && chat.Username != "" {
+				displayName = chat.Name + " " + usernameStyle.Render("@"+chat.Username)
+			}
+
+			content.WriteString(style.Render(prefix + displayName + unread))
 			content.WriteString("\n")
 		}
 	}
 
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Type to search • ↑/↓: navigate • Enter: select • Esc: close"))
+	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Type to search • Ctrl-n/p: navigate • Enter: select • Esc: close"))
 
-	return boxStyle.Render(content.String())
+	box := boxStyle.Render(content.String())
+
+	// Center the box in the screen
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// messageLine represents a rendered line and which message it belongs to
+type messageLine struct {
+	text   string
+	msgIdx int
+}
+
+// formatRelativeTime formats a time as relative to now
+func formatRelativeTime(t time.Time) string {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	msgDay := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+
+	daysDiff := int(today.Sub(msgDay).Hours() / 24)
+
+	switch {
+	case daysDiff == 0:
+		// Today - just show time
+		return t.Format("15:04")
+	case daysDiff == 1:
+		// Yesterday
+		return "Yesterday " + t.Format("15:04")
+	case daysDiff < 7:
+		// Within a week
+		return fmt.Sprintf("%d days ago %s", daysDiff, t.Format("15:04"))
+	default:
+		// Older - show date
+		return t.Format("2 Jan 15:04")
+	}
 }
 
 func (m Model) renderMessages(maxHeight int) string {
@@ -1122,69 +1565,310 @@ func (m Model) renderMessages(maxHeight int) string {
 		return emptyStyle.Render("No messages yet. Press 'i' to start typing.")
 	}
 
-	var lines []string
+	// Styles
+	senderStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	ownSenderStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	replyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
 
-	selectedStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("237"))
+	// Calculate available width for message text (leave room for sender prefix)
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
 
-	senderStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("39"))
+	// Build all lines with message index tracking
+	var allLines []messageLine
 
-	ownSenderStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("42"))
-
-	timeStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241"))
-
-	replyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Italic(true)
-
-	for i, msg := range m.messages {
-		// Reply context
+	for msgIdx, msg := range m.messages {
+		// Reply context (if any)
 		if msg.ReplyToMsg != nil {
+			replySender := msg.ReplyToMsg.Sender
+			if m.showUsernames && msg.ReplyToMsg.SenderUsername != "" {
+				replySender = msg.ReplyToMsg.SenderUsername
+			}
 			replyText := msg.ReplyToMsg.Text
 			if len(replyText) > 30 {
 				replyText = replyText[:30] + "..."
 			}
-			lines = append(lines, replyStyle.Render(fmt.Sprintf("  ↳ %s: %s", msg.ReplyToMsg.Sender, replyText)))
+			allLines = append(allLines, messageLine{
+				text:   replyStyle.Render(fmt.Sprintf("↳ %s: %s", replySender, replyText)),
+				msgIdx: msgIdx,
+			})
 		}
 
-		// Sender
-		var sender string
+		// Determine which name to show
+		var senderName string
+		var senderDisplay string
 		if msg.IsOwn {
-			sender = ownSenderStyle.Render("You")
+			senderName = "You"
+			senderDisplay = ownSenderStyle.Render("You")
 		} else {
-			sender = senderStyle.Render(msg.Sender)
+			senderName = msg.Sender
+			if m.showUsernames && msg.SenderUsername != "" {
+				senderName = msg.SenderUsername
+			}
+			senderDisplay = senderStyle.Render(senderName)
 		}
 
-		// Message line
-		line := sender + ": " + msg.Text
+		// Format timestamp with relative date
+		timestamp := formatRelativeTime(msg.Time)
 
-		// Add time if selected
-		if i == m.selectedIdx {
-			line += " " + timeStyle.Render(msg.Time.Format("15:04"))
-			line = selectedStyle.Render(line)
+		// Wrap long messages
+		msgText := msg.Text
+		wrappedLines := wrapText(msgText, contentWidth-len(senderName)-4)
+
+		for i, wline := range wrappedLines {
+			var lineText string
+			if i == 0 {
+				// First line: include sender and timestamp
+				// Calculate padding to right-align timestamp
+				baseLen := len(senderName) + 2 + len(wline) // "sender: text"
+				padding := contentWidth - baseLen - len(timestamp)
+				if padding < 1 {
+					padding = 1
+				}
+				lineText = senderDisplay + ": " + wline + strings.Repeat(" ", padding) + timeStyle.Render(timestamp)
+			} else {
+				// Continuation: indent to align with message text
+				indent := strings.Repeat(" ", len(senderName)+2)
+				lineText = indent + wline
+			}
+			allLines = append(allLines, messageLine{text: lineText, msgIdx: msgIdx})
 		}
-
-		lines = append(lines, line)
 	}
 
-	content := strings.Join(lines, "\n")
+	totalLines := len(allLines)
+	viewportHeight := maxHeight - 1 // Leave room for scroll indicator
+	if viewportHeight < 1 {
+		viewportHeight = 1
+	}
 
-	// Ensure it fits in the available height
-	return lipgloss.NewStyle().
-		Height(maxHeight).
-		MaxHeight(maxHeight).
-		Render(content)
+	// Clamp cursorLine (use local var since we can't modify m in View)
+	cursorLine := m.cursorLine
+	if cursorLine >= totalLines {
+		cursorLine = totalLines - 1
+	}
+	if cursorLine < 0 {
+		cursorLine = 0
+	}
+
+	// Calculate viewport start to keep cursor visible
+	viewportStart := 0
+	if cursorLine >= viewportHeight {
+		// Cursor would be below viewport, scroll down
+		viewportStart = cursorLine - viewportHeight + 1
+	}
+	// If cursor is above current viewport, viewportStart stays at 0 or adjusts
+	// This simple logic keeps cursor at bottom of viewport when scrolling down
+	// and at top when scrolling up
+
+	// Ensure viewport doesn't go past end
+	maxViewportStart := totalLines - viewportHeight
+	if maxViewportStart < 0 {
+		maxViewportStart = 0
+	}
+	if viewportStart > maxViewportStart {
+		viewportStart = maxViewportStart
+	}
+
+	// Render visible lines
+	var visibleLines []string
+	viewportEnd := viewportStart + viewportHeight
+	if viewportEnd > totalLines {
+		viewportEnd = totalLines
+	}
+
+	// Cursor line style (highlighted background with full width)
+	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("237")).Width(m.width)
+
+	for i := viewportStart; i < viewportEnd; i++ {
+		line := allLines[i]
+		if i == cursorLine {
+			// Highlight cursor line with full-width background
+			visibleLines = append(visibleLines, cursorStyle.Render(line.text))
+		} else {
+			visibleLines = append(visibleLines, line.text)
+		}
+	}
+
+	// Pad with empty lines if needed
+	for len(visibleLines) < viewportHeight {
+		visibleLines = append(visibleLines, "")
+	}
+
+	// Add scroll indicator showing cursor position
+	scrollInfo := fmt.Sprintf("─ line %d/%d ", cursorLine+1, totalLines)
+	if viewportStart > 0 {
+		scrollInfo = "↑ " + scrollInfo
+	}
+	if viewportEnd < totalLines {
+		scrollInfo = scrollInfo + "↓"
+	}
+	visibleLines = append(visibleLines, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(scrollInfo))
+
+	return strings.Join(visibleLines, "\n")
+}
+
+// getSenderName returns the appropriate sender name based on display toggle
+func (m Model) getSenderName(msg *Message) string {
+	if msg.IsOwn {
+		return "You"
+	}
+	if m.showUsernames && msg.SenderUsername != "" {
+		return msg.SenderUsername
+	}
+	return msg.Sender
+}
+
+// getMessageAtCursor returns the message index that contains the cursor line
+func (m Model) getMessageAtCursor() int {
+	if len(m.messages) == 0 {
+		return -1
+	}
+
+	// Build line mapping (same logic as renderMessages)
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	var lineToMsg []int // maps line index to message index
+	for msgIdx, msg := range m.messages {
+		// Account for reply line
+		if msg.ReplyToMsg != nil {
+			lineToMsg = append(lineToMsg, msgIdx)
+		}
+		// Account for message lines
+		senderName := m.getSenderName(msg)
+		wrappedLines := wrapText(msg.Text, contentWidth-len(senderName)-4)
+		for range wrappedLines {
+			lineToMsg = append(lineToMsg, msgIdx)
+		}
+	}
+
+	// Clamp cursorLine
+	cursorLine := m.cursorLine
+	if cursorLine >= len(lineToMsg) {
+		cursorLine = len(lineToMsg) - 1
+	}
+	if cursorLine < 0 {
+		cursorLine = 0
+	}
+
+	if cursorLine < len(lineToMsg) {
+		return lineToMsg[cursorLine]
+	}
+	return len(m.messages) - 1 // Default to last message
+}
+
+// getTotalLines returns the total number of visual lines for all messages
+func (m Model) getTotalLines() int {
+	if len(m.messages) == 0 {
+		return 0
+	}
+
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	totalLines := 0
+	for _, msg := range m.messages {
+		if msg.ReplyToMsg != nil {
+			totalLines++
+		}
+		senderName := m.getSenderName(msg)
+		wrappedLines := wrapText(msg.Text, contentWidth-len(senderName)-4)
+		totalLines += len(wrappedLines)
+	}
+	return totalLines
+}
+
+// clipboardResultMsg is sent when clipboard operation completes
+type clipboardResultMsg struct {
+	success bool
+	err     string
+}
+
+// copyToClipboard copies text to the system clipboard
+func (m Model) copyToClipboard(text string) tea.Cmd {
+	return func() tea.Msg {
+		// Try xclip first (X11), then xsel, then wl-copy (Wayland)
+		cmds := []struct {
+			name string
+			args []string
+		}{
+			{"xclip", []string{"-selection", "clipboard"}},
+			{"xsel", []string{"--clipboard", "--input"}},
+			{"wl-copy", []string{}},
+		}
+
+		for _, c := range cmds {
+			cmd := exec.Command(c.name, c.args...)
+			cmd.Stdin = strings.NewReader(text)
+			if err := cmd.Run(); err == nil {
+				return clipboardResultMsg{success: true}
+			}
+		}
+
+		return clipboardResultMsg{success: false, err: "no clipboard tool found"}
+	}
+}
+
+// wrapText wraps text to the specified width, handling explicit newlines
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		width = 80
+	}
+
+	// First split by explicit newlines
+	paragraphs := strings.Split(text, "\n")
+	var lines []string
+
+	for _, para := range paragraphs {
+		// Handle empty lines (preserve blank lines in messages)
+		if para == "" {
+			lines = append(lines, "")
+			continue
+		}
+
+		// Wrap this paragraph
+		for len(para) > 0 {
+			if len(para) <= width {
+				lines = append(lines, para)
+				break
+			}
+
+			// Find a good break point
+			breakAt := width
+			for breakAt > width/2 {
+				if para[breakAt] == ' ' {
+					break
+				}
+				breakAt--
+			}
+			if breakAt <= width/2 {
+				breakAt = width // No good break point, just cut
+			}
+
+			lines = append(lines, para[:breakAt])
+			para = strings.TrimLeft(para[breakAt:], " ")
+		}
+	}
+
+	// Ensure at least one line
+	if len(lines) == 0 {
+		lines = append(lines, "")
+	}
+
+	return lines
 }
 
 func (m Model) viewInput() string {
 	placeholder := "Type a message..."
 	if m.vim.Mode() == keybind.ModeNormal {
-		placeholder = "Press 'i' to type, 'r' to reply, Ctrl-p for switcher"
+		placeholder = "i: type, r: reply, yy: copy, u: toggle names, Ctrl-p: switcher"
 	}
 	m.input.Placeholder = placeholder
 

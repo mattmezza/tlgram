@@ -65,6 +65,7 @@ const (
 	ActionSelect
 	ActionCancel
 	ActionQuit
+	ActionToggleUsername
 
 	// Search
 	ActionSearchNext
@@ -200,9 +201,12 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "r":
 		v.reset()
 		return Result{Action: ActionReply}
-	case "y":
+	case "yy":
 		v.reset()
 		return Result{Action: ActionCopy}
+	case "u":
+		v.reset()
+		return Result{Action: ActionToggleUsername}
 	case "d":
 		v.reset()
 		return Result{Action: ActionDownload}
@@ -273,7 +277,7 @@ func (v *VimState) reset() {
 }
 
 func (v *VimState) isPrefixOfKnownSequence(prefix string) bool {
-	knownSequences := []string{"gg"}
+	knownSequences := []string{"gg", "yy"}
 	for _, seq := range knownSequences {
 		if strings.HasPrefix(seq, prefix) && seq != prefix {
 			return true

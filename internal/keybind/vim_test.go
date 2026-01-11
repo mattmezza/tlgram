@@ -193,7 +193,7 @@ func TestVimState_Actions(t *testing.T) {
 		expected Action
 	}{
 		{"reply", "r", ActionReply},
-		{"copy", "y", ActionCopy},
+		{"copy", "yy", ActionCopy},
 		{"download", "d", ActionDownload},
 		{"quit", "q", ActionQuit},
 		{"switcher", "ctrl+p", ActionOpenSwitcher},
