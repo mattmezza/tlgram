@@ -4,9 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+)
+
+// Environment variable names for API credentials
+const (
+	EnvAPIID   = "TLGRAM_API_ID"
+	EnvAPIHash = "TLGRAM_API_HASH"
 )
 
 // Config represents the application configuration
@@ -142,12 +149,28 @@ func Load() (*Config, error) {
 	cfg.General.DownloadDir = expandPath(cfg.General.DownloadDir)
 	cfg.Logging.LogFile = expandPath(cfg.Logging.LogFile)
 
+	// Load API credentials from environment variables (overrides config file)
+	cfg.loadEnvCredentials()
+
 	// Validate configuration
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// loadEnvCredentials loads API credentials from environment variables
+// Environment variables take precedence over config file values
+func (c *Config) loadEnvCredentials() {
+	if apiID := os.Getenv(EnvAPIID); apiID != "" {
+		if id, err := strconv.Atoi(apiID); err == nil {
+			c.Telegram.APIID = id
+		}
+	}
+	if apiHash := os.Getenv(EnvAPIHash); apiHash != "" {
+		c.Telegram.APIHash = apiHash
+	}
 }
 
 // validate checks if the configuration is valid
@@ -205,7 +228,13 @@ func createDefaultConfig(path string) error {
 
 [telegram]
 # Get your API credentials from https://my.telegram.org/apps
-# REQUIRED: You must set these values to use tlgram
+#
+# You can set credentials here OR via environment variables:
+#   export TLGRAM_API_ID=12345678
+#   export TLGRAM_API_HASH="your_api_hash"
+#
+# Environment variables take precedence over config file values.
+# This allows you to commit this config to your dotfiles without exposing secrets.
 api_id = 0
 api_hash = ""
 

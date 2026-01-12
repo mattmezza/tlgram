@@ -42,17 +42,24 @@ go build -o tlgram ./cmd/tlgram
    - Note your `api_id` and `api_hash`
 
 2. **Configure tlgram**
+
+   **Option A: Environment variables** (recommended for dotfiles)
    ```bash
-   # Edit config file
-   vim ~/.config/tlgram/config.toml
+   export TLGRAM_API_ID=12345678
+   export TLGRAM_API_HASH="your_api_hash_here"
    ```
 
-   Add your credentials:
+   **Option B: Config file**
+   ```bash
+   vim ~/.config/tlgram/config.toml
+   ```
    ```toml
    [telegram]
    api_id = 12345678
    api_hash = "your_api_hash_here"
    ```
+
+   Environment variables take precedence over config file values.
 
 3. **Run tlgram**
    ```bash
