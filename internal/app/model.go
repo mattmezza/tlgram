@@ -949,7 +949,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine -= result.Count
 		m.adjustViewport()
 		// Load more messages when reaching the top
-		if m.cursorLine == 0 && !m.loadingMore  {
+		if m.cursorLine == 0 && !m.loadingMore {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -958,7 +958,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine = 0
 		m.adjustViewport()
 		// Load more messages when jumping to top
-		if !m.loadingMore  {
+		if !m.loadingMore {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -993,7 +993,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine -= pageSize * result.Count
 		m.adjustViewport()
 		// Load more messages when reaching the top
-		if m.cursorLine == 0 && !m.loadingMore  {
+		if m.cursorLine == 0 && !m.loadingMore {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -1019,7 +1019,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine -= pageSize * result.Count
 		m.adjustViewport()
 		// Load more messages when reaching the top
-		if m.cursorLine == 0 && !m.loadingMore  {
+		if m.cursorLine == 0 && !m.loadingMore {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
