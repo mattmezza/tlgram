@@ -3,8 +3,8 @@
 
 # Binaries
 bin/
-tlgram
-tlgram-*
+/tlgram
+/tlgram-*
 *.exe
 *.exe~
 *.dll
@@ -35,6 +35,7 @@ Thumbs.db
 
 # Build artifacts
 dist/
+cmd/tlgram/changelog.txt
 
 # TDLib build output
 tdlib-out/

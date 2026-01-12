@@ -21,6 +21,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Prepare changelog for embed
+        run: cp CHANGELOG.md cmd/tlgram/changelog.txt
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
@@ -37,6 +40,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      - name: Prepare changelog for embed
+        run: cp CHANGELOG.md cmd/tlgram/changelog.txt
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
@@ -71,6 +77,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      - name: Prepare changelog for embed
+        run: cp CHANGELOG.md cmd/tlgram/changelog.txt
 
       - name: Build
         env:

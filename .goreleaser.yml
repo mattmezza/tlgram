@@ -3,6 +3,7 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - cp CHANGELOG.md cmd/tlgram/changelog.txt
 
 builds:
   - id: tlgram
@@ -35,6 +36,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - CHANGELOG.md
 
 checksum:
   name_template: 'checksums.txt'

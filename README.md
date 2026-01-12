@@ -17,27 +17,60 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 
 ## Installation
 
-### Pre-built Binaries
+### Quick Install (Linux/macOS)
 
-Download from [Releases](https://github.com/mattmezza/tlgram/releases).
+```bash
+# Download and install the latest release
+curl -fsSL https://github.com/mattmezza/tlgram/releases/latest/download/tlgram_$(uname -s)_$(uname -m).tar.gz | tar -xz -C /usr/local/bin tlgram
 
-**Platform Compatibility:**
-- **Linux** - Fully tested and supported
-- **macOS** - Builds available but untested
-- **Windows** - Builds available but untested
+# Or with wget
+wget -qO- https://github.com/mattmezza/tlgram/releases/latest/download/tlgram_$(uname -s)_$(uname -m).tar.gz | tar -xz -C /usr/local/bin tlgram
+```
+
+> **Note:** You may need `sudo` for `/usr/local/bin`. Alternatively, install to `~/.local/bin`:
+> ```bash
+> mkdir -p ~/.local/bin
+> curl -fsSL https://github.com/mattmezza/tlgram/releases/latest/download/tlgram_$(uname -s)_$(uname -m).tar.gz | tar -xz -C ~/.local/bin tlgram
+> ```
+
+### Manual Download
+
+Download the appropriate binary from [Releases](https://github.com/mattmezza/tlgram/releases):
+
+| Platform | Architecture | Download |
+|----------|--------------|----------|
+| Linux | x86_64 | `tlgram_VERSION_linux_amd64.tar.gz` |
+| Linux | ARM64 | `tlgram_VERSION_linux_arm64.tar.gz` |
+| macOS | Intel | `tlgram_VERSION_darwin_amd64.tar.gz` |
+| macOS | Apple Silicon | `tlgram_VERSION_darwin_arm64.tar.gz` |
+| Windows | x86_64 | `tlgram_VERSION_windows_amd64.zip` |
+
+### Windows Installation
+
+1. Download `tlgram_VERSION_windows_amd64.zip` from [Releases](https://github.com/mattmezza/tlgram/releases)
+2. Extract the zip file
+3. Move `tlgram.exe` to a directory in your PATH (e.g., `C:\Users\YourName\bin`)
+4. Or run it directly from the extracted folder
 
 ### Build from Source
 
 Requires Go 1.22+.
 
 ```bash
-# Clone the repository
+# Clone and build
 git clone https://github.com/mattmezza/tlgram.git
 cd tlgram
-
-# Build tlgram
 go build -o tlgram ./cmd/tlgram
+
+# Install to your PATH
+sudo mv tlgram /usr/local/bin/
 ```
+
+### Platform Compatibility
+
+- **Linux** - Fully tested and supported
+- **macOS** - Builds available but untested
+- **Windows** - Builds available but untested (contributions welcome!)
 
 ## Quick Start
 
@@ -101,6 +134,7 @@ tlgram --chat -100123456   # Open group by ID
 tlgram --chat work         # Open chat aliased as "work"
 tlgram --help              # Show help
 tlgram --version           # Show version
+tlgram --changelog         # Show changelog
 ```
 
 ### Keybindings
