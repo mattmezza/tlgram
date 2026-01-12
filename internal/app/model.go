@@ -1412,10 +1412,14 @@ func (m Model) viewChat() string {
 	parts = append(parts, m.statusBar.View())
 
 	// Messages
-	// Height calculation: status bar (1) + input textarea (3) + input border (2) + scroll indicator (1) = 7
-	msgHeight := m.height - 7
+	// Height calculation: status bar (1) + input textarea (dynamic) + input border (2) + scroll indicator (1)
+	inputHeight := m.input.Height() + 2         // textarea height + border (top + bottom)
+	msgHeight := m.height - 1 - inputHeight - 1 // status bar, input area, scroll indicator
 	if m.replyingTo != nil {
 		msgHeight--
+	}
+	if msgHeight < 3 {
+		msgHeight = 3
 	}
 	parts = append(parts, m.renderMessages(msgHeight))
 
@@ -1888,8 +1892,12 @@ func (m Model) getTotalLines() int {
 
 // getViewportHeight returns the number of visible lines in the message viewport
 func (m Model) getViewportHeight() int {
-	// Height minus status bar (1), input area (~3), scroll indicator (1)
-	vh := m.height - 6
+	// Height minus status bar (1), input area (textarea + border), scroll indicator (1)
+	inputHeight := m.input.Height() + 2      // textarea height + border (top + bottom)
+	vh := m.height - 1 - inputHeight - 1 - 1 // status bar, input area, scroll indicator, buffer
+	if m.replyingTo != nil {
+		vh--
+	}
 	if vh < 1 {
 		vh = 1
 	}
