@@ -168,6 +168,8 @@ tlgram --changelog         # Show changelog
 | `Ctrl-p` | Open chat switcher |
 | `r` | Reply to message at cursor |
 | `R` | Mark messages as read up to cursor |
+| `o` | Jump to original message (for replies) |
+| `Ctrl-o` | Jump back after jumping to original |
 | `yy` | Copy message at cursor to clipboard |
 | `u` | Toggle between full names and @usernames |
 | `U` | Mark dialog as unread |

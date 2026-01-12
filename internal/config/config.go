@@ -42,7 +42,8 @@ type AppearanceConfig struct {
 	AlwaysShowTimestamps bool   `toml:"always_show_timestamps"`
 	TimestampFormat      string `toml:"timestamp_format"`
 	Theme                string `toml:"theme"`
-	AuthorDisplay        string `toml:"author_display"` // "fullname" or "username"
+	AuthorDisplay        string `toml:"author_display"`       // "fullname" or "username"
+	ReplyPreviewLength   int    `toml:"reply_preview_length"` // max chars for reply preview
 }
 
 // KeybindingsConfig contains keybinding settings
@@ -92,6 +93,7 @@ func Default() *Config {
 			TimestampFormat:      "15:04:05",
 			Theme:                "default",
 			AuthorDisplay:        "fullname",
+			ReplyPreviewLength:   30,
 		},
 		ChatAliases: make(map[string]string),
 		Keybindings: KeybindingsConfig{
@@ -264,6 +266,9 @@ theme = "default"
 # Author display format: "fullname" or "username"
 # Toggle with 'u' key in chat view
 author_display = "fullname"
+
+# Maximum characters to show in reply preview
+reply_preview_length = 30
 
 [chat_aliases]
 # Define shortcuts for your frequent chats

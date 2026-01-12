@@ -60,8 +60,10 @@ const (
 	ActionCancel
 	ActionQuit
 	ActionToggleUsername
-	ActionMarkRead   // R - mark messages as read up to cursor
-	ActionMarkUnread // U - mark dialog as unread
+	ActionMarkRead       // R - mark messages as read up to cursor
+	ActionMarkUnread     // U - mark dialog as unread
+	ActionJumpToOriginal // o - jump to original message (for replies)
+	ActionJumpBack       // ctrl+o - jump back after jumping to original
 )
 
 // Result holds the action and any associated count
@@ -202,6 +204,12 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "d":
 		v.reset()
 		return Result{Action: ActionDownload}
+	case "o":
+		v.reset()
+		return Result{Action: ActionJumpToOriginal}
+	case "ctrl+o":
+		v.reset()
+		return Result{Action: ActionJumpBack}
 	case "ctrl+p":
 		v.reset()
 		return Result{Action: ActionOpenSwitcher}

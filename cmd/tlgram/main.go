@@ -132,6 +132,8 @@ VIM KEYBINDINGS:
     Escape      Return to NORMAL mode
     r           Reply to selected message
     R           Mark messages as read up to cursor
+    o           Jump to original message (for replies)
+    Ctrl-o      Jump back after jumping
     yy          Copy message to clipboard
     u           Toggle full names / @usernames
     U           Mark dialog as unread

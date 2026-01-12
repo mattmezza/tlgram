@@ -75,6 +75,9 @@ type Model struct {
 	cursorLine    int // Which visual line the cursor is on (0-indexed)
 	viewportStart int // First visible line in viewport
 
+	// Jump history for navigating to original messages and back
+	jumpStack []int // Stack of cursor positions to return to
+
 	// Display preferences
 	showUsernames bool // Toggle between full name and @username
 
@@ -110,7 +113,7 @@ type Message struct {
 	Text           string
 	IsOwn          bool
 	Time           time.Time
-	ReplyToMsg     *Message
+	ReplyToID      int64 // ID of message this is replying to (0 if not a reply)
 }
 
 // New creates a new application model
@@ -422,7 +425,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			linesAdded := 0
 			for _, newMsg := range msg.messages {
-				if newMsg.ReplyToMsg != nil {
+				if newMsg.ReplyToID > 0 {
 					linesAdded++
 				}
 				wrappedLines := wrapText(newMsg.Text, contentWidth-len(newMsg.Sender)-4)
@@ -806,6 +809,7 @@ func convertTelegramMessage(m *telegram.Message) *Message {
 		Text:           m.Text,
 		IsOwn:          m.IsOutgoing,
 		Time:           m.Date,
+		ReplyToID:      m.ReplyToID,
 	}
 }
 
@@ -1195,6 +1199,42 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Mark dialog as unread
 		if m.currentChat != nil {
 			return m, m.markDialogUnread(m.currentChat.ID)
+		}
+
+	case keybind.ActionJumpToOriginal:
+		// Jump to original message if current message is a reply
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx >= 0 && msgIdx < len(m.messages) {
+			currentMsg := m.messages[msgIdx]
+			if currentMsg.ReplyToID > 0 {
+				// Find the original message
+				originalIdx := m.findMessageIndex(currentMsg.ReplyToID)
+				if originalIdx >= 0 {
+					// Push current position to jump stack
+					m.jumpStack = append(m.jumpStack, m.cursorLine)
+					// Jump to original message
+					targetLine := m.getLineForMessageIndex(originalIdx)
+					if targetLine >= 0 {
+						m.cursorLine = targetLine
+						m.adjustViewport()
+					}
+				} else {
+					// Original message not loaded
+					var cmd tea.Cmd
+					m.statusBar, cmd = m.statusBar.ShowNotification("Original message not loaded", 2*time.Second)
+					return m, cmd
+				}
+			}
+		}
+
+	case keybind.ActionJumpBack:
+		// Jump back to previous position
+		if len(m.jumpStack) > 0 {
+			// Pop from stack
+			prevLine := m.jumpStack[len(m.jumpStack)-1]
+			m.jumpStack = m.jumpStack[:len(m.jumpStack)-1]
+			m.cursorLine = prevLine
+			m.adjustViewport()
 		}
 
 	case keybind.ActionExitToNormal:
@@ -1723,19 +1763,28 @@ func (m Model) renderMessages(maxHeight int) string {
 		}
 
 		// Reply context (if any)
-		if msg.ReplyToMsg != nil {
-			replySender := msg.ReplyToMsg.Sender
-			if m.showUsernames && msg.ReplyToMsg.SenderUsername != "" {
-				replySender = msg.ReplyToMsg.SenderUsername
-			}
-			replyText := msg.ReplyToMsg.Text
-			if len(replyText) > 30 {
-				replyText = replyText[:30] + "..."
+		if msg.ReplyToID > 0 {
+			replyContent := "↳ Reply"
+			// Look up the original message in loaded messages
+			if originalMsg := m.findMessageByID(msg.ReplyToID); originalMsg != nil {
+				replySender := originalMsg.Sender
+				if m.showUsernames && originalMsg.SenderUsername != "" {
+					replySender = originalMsg.SenderUsername
+				}
+				replyText := originalMsg.Text
+				previewLen := m.config.Appearance.ReplyPreviewLength
+				if previewLen <= 0 {
+					previewLen = 30 // fallback default
+				}
+				if len(replyText) > previewLen {
+					replyText = replyText[:previewLen] + "..."
+				}
+				replyContent = fmt.Sprintf("↳ %s: %s", replySender, replyText)
 			}
 			allLines = append(allLines, messageLine{
 				msgIdx:   msgIdx,
 				lineType: 0, // reply
-				content:  fmt.Sprintf("↳ %s: %s", replySender, replyText),
+				content:  replyContent,
 				isUnread: isUnread,
 			})
 		}
@@ -1936,6 +1985,70 @@ func (m Model) getSenderName(msg *Message) string {
 	return msg.Sender
 }
 
+// findMessageByID finds a message by its ID in the loaded messages
+func (m Model) findMessageByID(id int64) *Message {
+	for _, msg := range m.messages {
+		if msg.ID == id {
+			return msg
+		}
+	}
+	return nil
+}
+
+// findMessageIndex finds the index of a message by its ID
+func (m Model) findMessageIndex(id int64) int {
+	for i, msg := range m.messages {
+		if msg.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// getLineForMessageIndex returns the first cursor line for a message at the given index
+func (m Model) getLineForMessageIndex(targetIdx int) int {
+	if len(m.messages) == 0 || targetIdx < 0 || targetIdx >= len(m.messages) {
+		return -1
+	}
+
+	// Calculate max sender name length (same logic as renderMessages)
+	maxSenderLen := 0
+	for _, msg := range m.messages {
+		senderName := m.getSenderName(msg)
+		if len(senderName) > maxSenderLen {
+			maxSenderLen = len(senderName)
+		}
+	}
+
+	// Calculate content width
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	line := 0
+	for msgIdx, msg := range m.messages {
+		if msgIdx == targetIdx {
+			return line
+		}
+		// Account for reply line
+		if msg.ReplyToID > 0 {
+			line++
+		}
+		// Account for message lines
+		timestamp := formatRelativeTime(msg.Time)
+		timestampWidth := displayWidth(timestamp)
+		firstLineWidth := contentWidth - maxSenderLen - 4 - timestampWidth - 1
+		if firstLineWidth < 20 {
+			firstLineWidth = 20
+		}
+		contLineWidth := contentWidth - maxSenderLen - 4
+		wrappedLines := wrapTextFirstLine(msg.Text, firstLineWidth, contLineWidth)
+		line += len(wrappedLines)
+	}
+	return -1
+}
+
 // getMessageAtCursor returns the message index that contains the cursor line
 func (m Model) getMessageAtCursor() int {
 	if len(m.messages) == 0 {
@@ -1960,7 +2073,7 @@ func (m Model) getMessageAtCursor() int {
 	var lineToMsg []int // maps line index to message index
 	for msgIdx, msg := range m.messages {
 		// Account for reply line
-		if msg.ReplyToMsg != nil {
+		if msg.ReplyToID > 0 {
 			lineToMsg = append(lineToMsg, msgIdx)
 		}
 		// Account for message lines (use same width calculation as renderMessages)
@@ -2014,7 +2127,7 @@ func (m Model) getTotalLines() int {
 
 	totalLines := 0
 	for _, msg := range m.messages {
-		if msg.ReplyToMsg != nil {
+		if msg.ReplyToID > 0 {
 			totalLines++
 		}
 		// Use same width calculation as renderMessages

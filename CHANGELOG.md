@@ -7,7 +7,11 @@ All notable changes to tlgram will be documented in this file.
 ### Added
 - Mark messages as read up to cursor position (R key in chat view)
 - Mark dialog as unread flag (U key, works in chat view and chat switcher)
-- Visual styling for unread messages (blue bar indicator)
+- Visual styling for unread messages (red bold bar indicator)
+- Reply context preview showing original message snippet above replies
+- Jump to original message with `o` key when on a reply
+- Jump back with `Ctrl-o` after jumping to original (vim-style jump stack)
+- Configurable reply preview length (`reply_preview_length` in config)
 
 ## [0.1.0] - 2026-01-12
 
