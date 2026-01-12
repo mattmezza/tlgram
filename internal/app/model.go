@@ -515,6 +515,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+			// Reset new message counter
+			m.newMsgCount = 0
 		}
 		return m, cmd
 
@@ -1501,6 +1503,9 @@ func (m Model) viewChatList() string {
 		if chat.UnreadCount > 0 {
 			unread = fmt.Sprintf(" (%d)", chat.UnreadCount)
 			style = style.Bold(true)
+		} else if chat.MarkedUnread {
+			unread = " •"
+			style = style.Bold(true)
 		}
 
 		line := fmt.Sprintf("%s%s%s", prefix, chat.Name, unread)
@@ -1616,6 +1621,8 @@ func (m Model) viewSwitcher() string {
 			unread := ""
 			if chat.UnreadCount > 0 {
 				unread = fmt.Sprintf(" (%d)", chat.UnreadCount)
+			} else if chat.MarkedUnread {
+				unread = " •"
 			}
 
 			// For DMs, also show username
@@ -1860,8 +1867,8 @@ func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, 
 		textStyle = lipgloss.NewStyle()
 	}
 
-	// Unread marker style (blue bar)
-	unreadMarkerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	// Unread marker style (red bold bar for visibility)
+	unreadMarkerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 	unreadPrefix := "  " // Default: no marker (2 spaces for alignment)
 	if line.isUnread {
 		unreadPrefix = unreadMarkerStyle.Render("| ")
