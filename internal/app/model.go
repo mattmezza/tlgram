@@ -515,8 +515,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			// Reset new message counter
-			m.newMsgCount = 0
+			// Update new message counter: count messages still newer than what was marked read
+			stillNew := 0
+			for _, message := range m.messages {
+				if message.ID > msg.maxMsgID && !message.IsOwn {
+					stillNew++
+				}
+			}
+			m.newMsgCount = stillNew
 		}
 		return m, cmd
 
