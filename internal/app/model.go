@@ -1677,9 +1677,17 @@ func (m Model) renderMessages(maxHeight int) string {
 
 		// Format timestamp with relative date
 		timestamp := formatRelativeTime(msg.Time)
+		timestampWidth := displayWidth(timestamp)
 
-		// Wrap long messages (use maxSenderLen for consistent width)
-		wrappedLines := wrapText(msg.Text, contentWidth-maxSenderLen-4)
+		// Calculate widths: first line needs room for timestamp, continuation lines don't
+		firstLineWidth := contentWidth - maxSenderLen - 4 - timestampWidth - 1
+		if firstLineWidth < 20 {
+			firstLineWidth = 20 // Minimum width for first line
+		}
+		contLineWidth := contentWidth - maxSenderLen - 4
+
+		// Wrap long messages with different widths for first vs continuation lines
+		wrappedLines := wrapTextFirstLine(msg.Text, firstLineWidth, contLineWidth)
 
 		for i, wline := range wrappedLines {
 			if i == 0 {
@@ -1813,9 +1821,9 @@ func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, 
 			styledSender = senderStyle.Render(line.sender)
 		}
 
-		// Calculate padding for right-aligned timestamp (use lipgloss.Width for emoji support)
-		contentDisplayWidth := lipgloss.Width(line.content)
-		timestampDisplayWidth := lipgloss.Width(line.timestamp)
+		// Calculate padding for right-aligned timestamp (use displayWidth for emoji support)
+		contentDisplayWidth := displayWidth(line.content)
+		timestampDisplayWidth := displayWidth(line.timestamp)
 		baseLen := maxSenderLen + 2 + contentDisplayWidth
 		padding := contentWidth - baseLen - timestampDisplayWidth
 		if padding < 1 {
@@ -1831,7 +1839,7 @@ func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, 
 
 	// Pad to full width for cursor line
 	if isCursor {
-		lineWidth := lipgloss.Width(result)
+		lineWidth := displayWidth(result)
 		if lineWidth < m.width {
 			result = result + textStyle.Render(strings.Repeat(" ", m.width-lineWidth))
 		}
@@ -1857,6 +1865,15 @@ func (m Model) getMessageAtCursor() int {
 		return -1
 	}
 
+	// Calculate max sender name length (same logic as renderMessages)
+	maxSenderLen := 0
+	for _, msg := range m.messages {
+		senderName := m.getSenderName(msg)
+		if len(senderName) > maxSenderLen {
+			maxSenderLen = len(senderName)
+		}
+	}
+
 	// Build line mapping (same logic as renderMessages)
 	contentWidth := m.width - 4
 	if contentWidth < 40 {
@@ -1869,9 +1886,15 @@ func (m Model) getMessageAtCursor() int {
 		if msg.ReplyToMsg != nil {
 			lineToMsg = append(lineToMsg, msgIdx)
 		}
-		// Account for message lines
-		senderName := m.getSenderName(msg)
-		wrappedLines := wrapText(msg.Text, contentWidth-len(senderName)-4)
+		// Account for message lines (use same width calculation as renderMessages)
+		timestamp := formatRelativeTime(msg.Time)
+		timestampWidth := displayWidth(timestamp)
+		firstLineWidth := contentWidth - maxSenderLen - 4 - timestampWidth - 1
+		if firstLineWidth < 20 {
+			firstLineWidth = 20
+		}
+		contLineWidth := contentWidth - maxSenderLen - 4
+		wrappedLines := wrapTextFirstLine(msg.Text, firstLineWidth, contLineWidth)
 		for range wrappedLines {
 			lineToMsg = append(lineToMsg, msgIdx)
 		}
@@ -1898,6 +1921,15 @@ func (m Model) getTotalLines() int {
 		return 0
 	}
 
+	// Calculate max sender name length (same logic as renderMessages)
+	maxSenderLen := 0
+	for _, msg := range m.messages {
+		senderName := m.getSenderName(msg)
+		if len(senderName) > maxSenderLen {
+			maxSenderLen = len(senderName)
+		}
+	}
+
 	contentWidth := m.width - 4
 	if contentWidth < 40 {
 		contentWidth = 40
@@ -1908,8 +1940,15 @@ func (m Model) getTotalLines() int {
 		if msg.ReplyToMsg != nil {
 			totalLines++
 		}
-		senderName := m.getSenderName(msg)
-		wrappedLines := wrapText(msg.Text, contentWidth-len(senderName)-4)
+		// Use same width calculation as renderMessages
+		timestamp := formatRelativeTime(msg.Time)
+		timestampWidth := displayWidth(timestamp)
+		firstLineWidth := contentWidth - maxSenderLen - 4 - timestampWidth - 1
+		if firstLineWidth < 20 {
+			firstLineWidth = 20
+		}
+		contLineWidth := contentWidth - maxSenderLen - 4
+		wrappedLines := wrapTextFirstLine(msg.Text, firstLineWidth, contLineWidth)
 		totalLines += len(wrappedLines)
 	}
 	return totalLines
@@ -1994,7 +2033,103 @@ func (m Model) copyToClipboard(text string) tea.Cmd {
 	}
 }
 
+// wrapTextFirstLine wraps text with different widths for first line vs continuation lines
+// First line is narrower to leave room for timestamp
+func wrapTextFirstLine(text string, firstLineWidth, contLineWidth int) []string {
+	if firstLineWidth <= 0 {
+		firstLineWidth = 40
+	}
+	if contLineWidth <= 0 {
+		contLineWidth = 80
+	}
+
+	// First split by explicit newlines
+	paragraphs := strings.Split(text, "\n")
+	var lines []string
+	isFirstLine := true
+
+	for _, para := range paragraphs {
+		// Handle empty lines (preserve blank lines in messages)
+		if para == "" {
+			lines = append(lines, "")
+			isFirstLine = false
+			continue
+		}
+
+		// Wrap this paragraph using display width
+		for displayWidth(para) > 0 {
+			width := contLineWidth
+			if isFirstLine {
+				width = firstLineWidth
+			}
+
+			paraWidth := displayWidth(para)
+			if paraWidth <= width {
+				lines = append(lines, para)
+				isFirstLine = false
+				break
+			}
+
+			// Find a good break point by iterating through runes
+			runes := []rune(para)
+			breakAt := 0
+			currentWidth := 0
+			lastSpace := -1
+			i := 0
+
+			for i < len(runes) {
+				r := runes[i]
+				var runeWidth int
+
+				// Check for emoji + skin tone modifier sequence
+				if isEmojiBase(r) && i+1 < len(runes) && isSkinToneModifier(runes[i+1]) {
+					runeWidth = 4
+					if currentWidth+runeWidth > width {
+						break
+					}
+					currentWidth += runeWidth
+					breakAt = i + 2
+					i += 2
+					continue
+				}
+
+				runeWidth = lipgloss.Width(string(r))
+				if currentWidth+runeWidth > width {
+					break
+				}
+				currentWidth += runeWidth
+				breakAt = i + 1
+				if r == ' ' {
+					lastSpace = i
+				}
+				i++
+			}
+
+			// Prefer breaking at a space if we found one in the latter half
+			if lastSpace > breakAt/2 {
+				breakAt = lastSpace
+			}
+
+			if breakAt == 0 {
+				breakAt = 1 // At minimum, take one rune
+			}
+
+			lines = append(lines, string(runes[:breakAt]))
+			para = strings.TrimLeft(string(runes[breakAt:]), " ")
+			isFirstLine = false
+		}
+	}
+
+	// Ensure at least one line
+	if len(lines) == 0 {
+		lines = append(lines, "")
+	}
+
+	return lines
+}
+
 // wrapText wraps text to the specified width, handling explicit newlines
+// Uses display width (not byte length) for proper emoji support
 func wrapText(text string, width int) []string {
 	if width <= 0 {
 		width = 80
@@ -2011,27 +2146,60 @@ func wrapText(text string, width int) []string {
 			continue
 		}
 
-		// Wrap this paragraph
-		for len(para) > 0 {
-			if len(para) <= width {
+		// Wrap this paragraph using display width
+		for displayWidth(para) > 0 {
+			paraWidth := displayWidth(para)
+			if paraWidth <= width {
 				lines = append(lines, para)
 				break
 			}
 
-			// Find a good break point
-			breakAt := width
-			for breakAt > width/2 {
-				if para[breakAt] == ' ' {
+			// Find a good break point by iterating through runes
+			runes := []rune(para)
+			breakAt := 0
+			currentWidth := 0
+			lastSpace := -1
+			i := 0
+
+			for i < len(runes) {
+				r := runes[i]
+				var runeWidth int
+
+				// Check for emoji + skin tone modifier sequence
+				if isEmojiBase(r) && i+1 < len(runes) && isSkinToneModifier(runes[i+1]) {
+					runeWidth = 4
+					if currentWidth+runeWidth > width {
+						break
+					}
+					currentWidth += runeWidth
+					breakAt = i + 2
+					i += 2
+					continue
+				}
+
+				runeWidth = lipgloss.Width(string(r))
+				if currentWidth+runeWidth > width {
 					break
 				}
-				breakAt--
-			}
-			if breakAt <= width/2 {
-				breakAt = width // No good break point, just cut
+				currentWidth += runeWidth
+				breakAt = i + 1
+				if r == ' ' {
+					lastSpace = i
+				}
+				i++
 			}
 
-			lines = append(lines, para[:breakAt])
-			para = strings.TrimLeft(para[breakAt:], " ")
+			// Prefer breaking at a space if we found one in the latter half
+			if lastSpace > breakAt/2 {
+				breakAt = lastSpace
+			}
+
+			if breakAt == 0 {
+				breakAt = 1 // At minimum, take one rune
+			}
+
+			lines = append(lines, string(runes[:breakAt]))
+			para = strings.TrimLeft(string(runes[breakAt:]), " ")
 		}
 	}
 
@@ -2056,4 +2224,106 @@ func (m Model) viewInput() string {
 		Width(m.width - 2)
 
 	return inputStyle.Render(m.input.View())
+}
+
+// isSkinToneModifier returns true if the rune is an emoji skin tone modifier
+// Skin tone modifiers are U+1F3FB through U+1F3FF
+func isSkinToneModifier(r rune) bool {
+	return r >= 0x1F3FB && r <= 0x1F3FF
+}
+
+// isEmojiBase returns true if the rune is a base emoji that can take a skin tone modifier
+// This includes most human-related emoji (hands, people, body parts)
+func isEmojiBase(r rune) bool {
+	// Common emoji that accept skin tone modifiers
+	// Hands and gestures: 👋👌👍👎👏🤝✌🤞🤟🤘🤙👆👇👈👉👊✊🤛🤜🙌👐🤲🙏💪🦵🦶🖐✋🖖👋🤚🖕☝️🫰🫱🫲🫳🫴🫵🫶
+	// People emoji, body parts, etc.
+	switch {
+	case r >= 0x1F44A && r <= 0x1F44F: // 👊👋👌👍👎👏
+		return true
+	case r >= 0x1F466 && r <= 0x1F478: // Various people emoji
+		return true
+	case r >= 0x1F481 && r <= 0x1F487: // More people emoji
+		return true
+	case r >= 0x1F4AA && r <= 0x1F4AA: // 💪
+		return true
+	case r >= 0x1F574 && r <= 0x1F575: // 🕴🕵
+		return true
+	case r >= 0x1F590 && r <= 0x1F590: // 🖐
+		return true
+	case r >= 0x1F595 && r <= 0x1F596: // 🖕🖖
+		return true
+	case r >= 0x1F645 && r <= 0x1F64F: // Various gestures 🙅🙆🙇🙋🙌🙍🙎🙏
+		return true
+	case r >= 0x1F6A3 && r <= 0x1F6A3: // 🚣
+		return true
+	case r >= 0x1F6B4 && r <= 0x1F6B6: // 🚴🚵🚶
+		return true
+	case r >= 0x1F6C0 && r <= 0x1F6C0: // 🛀
+		return true
+	case r >= 0x1F6CC && r <= 0x1F6CC: // 🛌
+		return true
+	case r >= 0x1F90C && r <= 0x1F90F: // 🤌🤍🤎🤏
+		return true
+	case r >= 0x1F918 && r <= 0x1F91F: // Various hand gestures 🤘🤙🤚🤛🤜🤝🤞🤟
+		return true
+	case r >= 0x1F926 && r <= 0x1F926: // 🤦
+		return true
+	case r >= 0x1F930 && r <= 0x1F939: // Various people 🤰🤱🤲🤳🤴🤵🤶🤷🤸🤹
+		return true
+	case r >= 0x1F93D && r <= 0x1F93E: // 🤽🤾
+		return true
+	case r >= 0x1F977 && r <= 0x1F977: // 🥷
+		return true
+	case r >= 0x1F9B5 && r <= 0x1F9B6: // 🦵🦶
+		return true
+	case r >= 0x1F9B8 && r <= 0x1F9B9: // 🦸🦹
+		return true
+	case r >= 0x1F9BB && r <= 0x1F9BB: // 🦻
+		return true
+	case r >= 0x1F9CD && r <= 0x1F9CF: // 🧍🧎🧏
+		return true
+	case r >= 0x1F9D1 && r <= 0x1F9DD: // 🧑🧒🧓🧔🧕🧖🧗🧘🧙🧚🧛🧜🧝
+		return true
+	case r >= 0x1FAC3 && r <= 0x1FAC5: // 🫃🫄🫅
+		return true
+	case r >= 0x1FAF0 && r <= 0x1FAF6: // 🫰🫱🫲🫳🫴🫵🫶
+		return true
+	case r == 0x261D: // ☝
+		return true
+	case r == 0x270A: // ✊
+		return true
+	case r == 0x270B: // ✋
+		return true
+	case r == 0x270C: // ✌
+		return true
+	case r == 0x270D: // ✍
+		return true
+	}
+	return false
+}
+
+// displayWidth calculates the display width of a string, accounting for emoji
+// skin tone modifier sequences which render differently than lipgloss.Width calculates
+func displayWidth(s string) int {
+	runes := []rune(s)
+	width := 0
+	i := 0
+	for i < len(runes) {
+		r := runes[i]
+
+		// Check if this is a base emoji followed by a skin tone modifier
+		if isEmojiBase(r) && i+1 < len(runes) && isSkinToneModifier(runes[i+1]) {
+			// Emoji + skin tone modifier renders as width 4 in terminal
+			// (some terminals render as 2, but most modern terminals do 4)
+			width += 4
+			i += 2 // Skip both the base emoji and the modifier
+			continue
+		}
+
+		// For other characters, use lipgloss.Width for individual rune
+		width += lipgloss.Width(string(r))
+		i++
+	}
+	return width
 }

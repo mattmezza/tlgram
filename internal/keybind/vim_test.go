@@ -127,43 +127,8 @@ func TestVimState_ModeTransitions(t *testing.T) {
 	}
 }
 
-func TestVimState_SearchMode(t *testing.T) {
-	v := NewVimState()
-
-	// Enter search mode
-	result := v.ProcessKey("/")
-	if result.Action != ActionEnterSearch {
-		t.Errorf("expected ActionEnterSearch, got %v", result.Action)
-	}
-	if v.Mode() != ModeSearch {
-		t.Errorf("expected ModeSearch, got %v", v.Mode())
-	}
-
-	// n for next match
-	result = v.ProcessKey("n")
-	if result.Action != ActionSearchNext {
-		t.Errorf("expected ActionSearchNext, got %v", result.Action)
-	}
-
-	// N for previous match
-	result = v.ProcessKey("N")
-	if result.Action != ActionSearchPrev {
-		t.Errorf("expected ActionSearchPrev, got %v", result.Action)
-	}
-}
-
-func TestVimState_CommandMode(t *testing.T) {
-	v := NewVimState()
-
-	// Enter command mode
-	result := v.ProcessKey(":")
-	if result.Action != ActionEnterCommand {
-		t.Errorf("expected ActionEnterCommand, got %v", result.Action)
-	}
-	if v.Mode() != ModeCommand {
-		t.Errorf("expected ModeCommand, got %v", v.Mode())
-	}
-}
+// Note: Search and Command modes are deferred (not implemented in current version)
+// See FR-009 and FR-010 requirements
 
 func TestVimState_SetMode(t *testing.T) {
 	v := NewVimState()
@@ -218,8 +183,6 @@ func TestModeString(t *testing.T) {
 	}{
 		{ModeNormal, "NORMAL"},
 		{ModeInsert, "INSERT"},
-		{ModeSearch, "SEARCH"},
-		{ModeCommand, "COMMAND"},
 		{Mode(99), "UNKNOWN"},
 	}
 
