@@ -104,11 +104,11 @@ func TestConfig_ResolveAlias(t *testing.T) {
 		expected string
 	}{
 		{"work", "@john_doe"},
-		{"WORK", "@john_doe"},           // Case insensitive
+		{"WORK", "@john_doe"}, // Case insensitive
 		{"Project", "-1001234567890"},
-		{"project", "-1001234567890"},   // Case insensitive
-		{"@jane_doe", "@jane_doe"},      // Not an alias, return as-is
-		{"unknown", "unknown"},          // Not an alias, return as-is
+		{"project", "-1001234567890"}, // Case insensitive
+		{"@jane_doe", "@jane_doe"},    // Not an alias, return as-is
+		{"unknown", "unknown"},        // Not an alias, return as-is
 	}
 
 	for _, tt := range tests {

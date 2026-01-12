@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/mattmezza/tlgram/internal/config"
 	"github.com/mattmezza/tlgram/internal/keybind"
 	"github.com/mattmezza/tlgram/internal/telegram"
@@ -137,15 +138,15 @@ func New(cfg *config.Config, targetChat string) Model {
 
 	m := Model{
 		config:        cfg,
-		targetChat:   targetChat,
-		vim:          vim,
-		demoMode:     demoMode,
-		authView:     auth.New(),
-		statusBar:    statusbar.New(),
-		input:        ti,
+		targetChat:    targetChat,
+		vim:           vim,
+		demoMode:      demoMode,
+		authView:      auth.New(),
+		statusBar:     statusbar.New(),
+		input:         ti,
 		switcherInput: switcherTi,
-		chats:        make([]*Chat, 0),
-		messages:     make([]*Message, 0),
+		chats:         make([]*Chat, 0),
+		messages:      make([]*Message, 0),
 		showUsernames: cfg.Appearance.AuthorDisplay == "username",
 	}
 
@@ -160,7 +161,6 @@ func New(cfg *config.Config, targetChat string) Model {
 
 	return m
 }
-
 
 // loadDemoData loads sample data for demo mode
 func (m *Model) loadDemoData() {
@@ -757,13 +757,6 @@ func convertTelegramMessage(m *telegram.Message) *Message {
 		IsOwn:          m.IsOutgoing,
 		Time:           m.Date,
 	}
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // updateStatusBarForChat updates the status bar with the current chat info

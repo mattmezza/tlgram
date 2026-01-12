@@ -13,13 +13,13 @@ import (
 type Config struct {
 	ConfigDir string `toml:"-"` // Not in TOML, set programmatically
 
-	General     GeneralConfig            `toml:"general"`
-	Appearance  AppearanceConfig         `toml:"appearance"`
-	ChatAliases map[string]string        `toml:"chat_aliases"`
-	Keybindings KeybindingsConfig        `toml:"keybindings"`
-	Network     NetworkConfig            `toml:"network"`
-	Logging     LoggingConfig            `toml:"logging"`
-	Telegram    TelegramConfig           `toml:"telegram"`
+	General     GeneralConfig     `toml:"general"`
+	Appearance  AppearanceConfig  `toml:"appearance"`
+	ChatAliases map[string]string `toml:"chat_aliases"`
+	Keybindings KeybindingsConfig `toml:"keybindings"`
+	Network     NetworkConfig     `toml:"network"`
+	Logging     LoggingConfig     `toml:"logging"`
+	Telegram    TelegramConfig    `toml:"telegram"`
 }
 
 // GeneralConfig contains general settings

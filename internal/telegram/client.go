@@ -18,14 +18,14 @@ import (
 
 // ClientConfig holds configuration for the Telegram client
 type ClientConfig struct {
-	APIID        int
-	APIHash      string
-	SessionDir   string
-	Phone        string
-	DeviceModel  string
-	SystemVer    string
-	AppVersion   string
-	LangCode     string
+	APIID       int
+	APIHash     string
+	SessionDir  string
+	Phone       string
+	DeviceModel string
+	SystemVer   string
+	AppVersion  string
+	LangCode    string
 }
 
 // DefaultClientConfig returns default client configuration
@@ -41,15 +41,15 @@ func DefaultClientConfig(configDir string) ClientConfig {
 
 // Client wraps the Telegram client
 type Client struct {
-	config      ClientConfig
-	updates     chan Update
-	authState   AuthState
-	connState   ConnectionState
-	chats       map[int64]*Chat
-	users       map[int64]*User
-	me          *User
-	mu          sync.RWMutex
-	closed      bool
+	config    ClientConfig
+	updates   chan Update
+	authState AuthState
+	connState ConnectionState
+	chats     map[int64]*Chat
+	users     map[int64]*User
+	me        *User
+	mu        sync.RWMutex
+	closed    bool
 
 	// gotd client
 	client     *telegram.Client
@@ -59,11 +59,11 @@ type Client struct {
 	cancel     context.CancelFunc
 
 	// Auth flow state
-	phoneCode       chan string
-	password        chan string
-	authErr         chan error
-	pendingPhone    string
-	phoneCodeHash   string
+	phoneCode     chan string
+	password      chan string
+	authErr       chan error
+	pendingPhone  string
+	phoneCodeHash string
 
 	// Connection ready signal (sends error or nil)
 	ready     chan error
@@ -177,7 +177,7 @@ func (c *Client) run() {
 			}
 		}
 
-		// Keep running until context is cancelled
+		// Keep running until context is canceled
 		<-ctx.Done()
 		return ctx.Err()
 	})
@@ -194,7 +194,7 @@ func (c *Client) handleAuth(ctx context.Context) error {
 	// Just wait for auth to be completed via SendPhoneNumber/SendAuthCode/Send2FAPassword
 	// The auth state machine is driven by the UI
 
-	// Wait for auth to complete or context to be cancelled
+	// Wait for auth to complete or context to be canceled
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -212,53 +212,6 @@ func (c *Client) handleAuth(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-// authFlow implements auth.UserAuthenticator
-type authFlow struct {
-	client *Client
-}
-
-func (a *authFlow) Phone(ctx context.Context) (string, error) {
-	// Return the pending phone if set
-	if a.client.pendingPhone != "" {
-		phone := a.client.pendingPhone
-		a.client.pendingPhone = ""
-		return phone, nil
-	}
-	return "", fmt.Errorf("phone number not provided")
-}
-
-func (a *authFlow) Password(ctx context.Context) (string, error) {
-	a.client.setAuthState(AuthStateWaitPassword)
-	select {
-	case pwd := <-a.client.password:
-		return pwd, nil
-	case err := <-a.client.authErr:
-		return "", err
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-}
-
-func (a *authFlow) Code(ctx context.Context, sentCode *tg.AuthSentCode) (string, error) {
-	a.client.setAuthState(AuthStateWaitCode)
-	select {
-	case code := <-a.client.phoneCode:
-		return code, nil
-	case err := <-a.client.authErr:
-		return "", err
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-}
-
-func (a *authFlow) SignUp(ctx context.Context) (auth.UserInfo, error) {
-	return auth.UserInfo{}, fmt.Errorf("sign up not supported")
-}
-
-func (a *authFlow) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {
-	return nil
 }
 
 // Handle implements updates.Handler
@@ -282,7 +235,7 @@ func (c *Client) Handle(ctx context.Context, u tg.UpdatesClass) error {
 	return nil
 }
 
-func (c *Client) handleUpdate(ctx context.Context, update tg.UpdateClass, users []tg.UserClass, chats []tg.ChatClass) {
+func (c *Client) handleUpdate(_ context.Context, update tg.UpdateClass, users []tg.UserClass, chats []tg.ChatClass) {
 	// Cache users and chats
 	for _, u := range users {
 		if user, ok := u.(*tg.User); ok {
@@ -328,25 +281,27 @@ func (c *Client) handleUpdate(ctx context.Context, update tg.UpdateClass, users 
 
 	case *tg.UpdateUserTyping:
 		c.sendUpdate(TypingUpdate{
-			ChatID: int64(u.UserID),
-			UserID: int64(u.UserID),
+			ChatID: u.UserID,
+			UserID: u.UserID,
 			Action: c.convertTypingAction(u.Action),
 		})
 
 	case *tg.UpdateChatUserTyping:
-		c.sendUpdate(TypingUpdate{
-			ChatID: int64(u.ChatID),
-			UserID: int64(u.FromID.(*tg.PeerUser).UserID),
-			Action: c.convertTypingAction(u.Action),
-		})
+		if peerUser, ok := u.FromID.(*tg.PeerUser); ok {
+			c.sendUpdate(TypingUpdate{
+				ChatID: u.ChatID,
+				UserID: peerUser.UserID,
+				Action: c.convertTypingAction(u.Action),
+			})
+		}
 	}
 }
 
 func (c *Client) handleShortMessage(u *tg.UpdateShortMessage) {
 	msg := &Message{
 		ID:         int64(u.ID),
-		ChatID:     int64(u.UserID),
-		SenderID:   int64(u.UserID),
+		ChatID:     u.UserID,
+		SenderID:   u.UserID,
 		Text:       u.Message,
 		Date:       time.Unix(int64(u.Date), 0),
 		IsOutgoing: u.Out,
@@ -354,10 +309,10 @@ func (c *Client) handleShortMessage(u *tg.UpdateShortMessage) {
 
 	// Get sender name from cache
 	c.mu.RLock()
-	if user, ok := c.users[int64(u.UserID)]; ok {
+	if user, ok := c.users[u.UserID]; ok {
 		msg.SenderName = user.FullName()
 	}
-	isMe := c.me != nil && int64(u.UserID) == c.me.ID
+	isMe := c.me != nil && u.UserID == c.me.ID
 	c.mu.RUnlock()
 
 	if msg.SenderName == "" {
@@ -374,8 +329,8 @@ func (c *Client) handleShortMessage(u *tg.UpdateShortMessage) {
 func (c *Client) handleShortChatMessage(u *tg.UpdateShortChatMessage) {
 	msg := &Message{
 		ID:         int64(u.ID),
-		ChatID:     int64(u.ChatID),
-		SenderID:   int64(u.FromID),
+		ChatID:     u.ChatID,
+		SenderID:   u.FromID,
 		Text:       u.Message,
 		Date:       time.Unix(int64(u.Date), 0),
 		IsOutgoing: u.Out,
@@ -383,10 +338,10 @@ func (c *Client) handleShortChatMessage(u *tg.UpdateShortChatMessage) {
 
 	// Get sender name from cache
 	c.mu.RLock()
-	if user, ok := c.users[int64(u.FromID)]; ok {
+	if user, ok := c.users[u.FromID]; ok {
 		msg.SenderName = user.FullName()
 	}
-	isMe := c.me != nil && int64(u.FromID) == c.me.ID
+	isMe := c.me != nil && u.FromID == c.me.ID
 	c.mu.RUnlock()
 
 	if msg.SenderName == "" {
@@ -431,7 +386,7 @@ func (c *Client) loadInitialData(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) cacheDialogs(users []tg.UserClass, chats []tg.ChatClass, dialogs []tg.DialogClass) {
+func (c *Client) cacheDialogs(users []tg.UserClass, chats []tg.ChatClass, _ []tg.DialogClass) {
 	for _, u := range users {
 		if user, ok := u.(*tg.User); ok {
 			c.cacheUser(c.convertUser(user))

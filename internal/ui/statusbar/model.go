@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/mattmezza/tlgram/internal/keybind"
 	"github.com/mattmezza/tlgram/internal/telegram"
 )
@@ -38,7 +39,7 @@ var (
 			Foreground(lipgloss.Color("42"))
 
 	reconnectingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214"))
+				Foreground(lipgloss.Color("214"))
 
 	offlineStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196"))

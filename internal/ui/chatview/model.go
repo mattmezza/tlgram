@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/mattmezza/tlgram/internal/keybind"
 	"github.com/mattmezza/tlgram/internal/telegram"
 )
@@ -61,9 +62,8 @@ type Model struct {
 	viewport viewport.Model
 	input    textinput.Model
 
-	vim         *keybind.VimState
-	replyingTo  *telegram.Message
-	searchQuery string
+	vim        *keybind.VimState
+	replyingTo *telegram.Message
 
 	// Configuration
 	sendKey string // "enter" or "ctrl-enter"
@@ -183,7 +183,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m.handleNormalMode(msg, key)
 }
 
-func (m Model) handleNormalMode(msg tea.KeyMsg, key string) (Model, tea.Cmd) {
+func (m Model) handleNormalMode(_ tea.KeyMsg, key string) (Model, tea.Cmd) {
 	result := m.vim.ProcessKey(key)
 
 	switch result.Action {

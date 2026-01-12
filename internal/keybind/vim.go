@@ -29,9 +29,9 @@ func (m Mode) String() string {
 type Action int
 
 const (
-	ActionNone Action = iota
-	ActionPending      // Waiting for more input (e.g., first 'g' in 'gg')
-	ActionUnknown      // Unknown key sequence
+	ActionNone    Action = iota
+	ActionPending        // Waiting for more input (e.g., first 'g' in 'gg')
+	ActionUnknown        // Unknown key sequence
 
 	// Navigation
 	ActionMoveUp
