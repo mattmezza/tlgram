@@ -23,7 +23,8 @@ import (
 type View int
 
 const (
-	ViewAuth View = iota
+	ViewSetup View = iota // No credentials configured
+	ViewAuth              // Waiting for authentication
 	ViewChatList
 	ViewChat
 	ViewSwitcher
@@ -47,15 +48,12 @@ type Model struct {
 	// Configuration
 	config *config.Config
 
-	// Demo mode (runs without TDLib)
-	demoMode bool
-
 	// Sub-components
 	authView  auth.Model
 	statusBar statusbar.Model
 	input     textarea.Model
 
-	// Telegram client (nil in demo mode)
+	// Telegram client
 	telegramClient *telegram.Client
 
 	// Chat state
@@ -133,14 +131,13 @@ func New(cfg *config.Config, targetChat string) Model {
 
 	vim := keybind.NewVimState()
 
-	// Check if we have API credentials - if not, we're in demo mode
-	demoMode := cfg.Telegram.APIID == 0 || cfg.Telegram.APIHash == ""
+	// Check if we have API credentials
+	hasCredentials := cfg.Telegram.APIID != 0 && cfg.Telegram.APIHash != ""
 
 	m := Model{
 		config:        cfg,
 		targetChat:    targetChat,
 		vim:           vim,
-		demoMode:      demoMode,
 		authView:      auth.New(),
 		statusBar:     statusbar.New(),
 		input:         ti,
@@ -150,59 +147,14 @@ func New(cfg *config.Config, targetChat string) Model {
 		showUsernames: cfg.Appearance.AuthorDisplay == "username",
 	}
 
-	// In demo mode, start with chat view directly
-	if demoMode {
-		m.currentView = ViewChat
-		m.statusBar.SetConnectionState(telegram.ConnectionStateReady)
-		m.loadDemoData()
-	} else {
+	// Show setup screen if no credentials, otherwise auth screen
+	if hasCredentials {
 		m.currentView = ViewAuth
+	} else {
+		m.currentView = ViewSetup
 	}
 
 	return m
-}
-
-// loadDemoData loads sample data for demo mode
-func (m *Model) loadDemoData() {
-	// Demo chats
-	m.chats = []*Chat{
-		{ID: 1, Name: "@john_doe", UnreadCount: 3, LastMessage: "Hey, how's the project going?", LastTime: time.Now().Add(-5 * time.Minute)},
-		{ID: 2, Name: "Project Alpha", UnreadCount: 0, LastMessage: "Build succeeded!", LastTime: time.Now().Add(-1 * time.Hour)},
-		{ID: 3, Name: "@jane_smith", UnreadCount: 1, LastMessage: "Can you review my PR?", LastTime: time.Now().Add(-2 * time.Hour)},
-		{ID: 4, Name: "Team Chat", UnreadCount: 15, LastMessage: "Meeting at 3pm", LastTime: time.Now().Add(-30 * time.Minute)},
-	}
-
-	// Resolve target chat or use first chat
-	if m.targetChat != "" {
-		resolved := m.config.ResolveAlias(m.targetChat)
-		for i, chat := range m.chats {
-			if strings.EqualFold(chat.Name, resolved) || strings.EqualFold(chat.Name, m.targetChat) {
-				m.chatIdx = i
-				m.currentChat = chat
-				break
-			}
-		}
-	}
-	if m.currentChat == nil && len(m.chats) > 0 {
-		m.currentChat = m.chats[0]
-	}
-
-	// Demo messages for current chat
-	if m.currentChat != nil {
-		m.updateStatusBarForChat()
-		m.messages = []*Message{
-			{ID: 1, Sender: "john_doe", Text: "Hey!", IsOwn: false, Time: time.Now().Add(-10 * time.Minute)},
-			{ID: 2, Sender: "You", Text: "Hi John! What's up?", IsOwn: true, Time: time.Now().Add(-9 * time.Minute)},
-			{ID: 3, Sender: "john_doe", Text: "Working on the new feature. Have you seen the latest PR?", IsOwn: false, Time: time.Now().Add(-8 * time.Minute)},
-			{ID: 4, Sender: "You", Text: "Not yet, I'll check it out now", IsOwn: true, Time: time.Now().Add(-7 * time.Minute)},
-			{ID: 5, Sender: "john_doe", Text: "Great! Let me know if you have any questions.", IsOwn: false, Time: time.Now().Add(-6 * time.Minute)},
-			{ID: 6, Sender: "john_doe", Text: "Also, don't forget about the team meeting at 3pm", IsOwn: false, Time: time.Now().Add(-5 * time.Minute)},
-			{ID: 7, Sender: "You", Text: "Thanks for the reminder! I'll be there.", IsOwn: true, Time: time.Now().Add(-4 * time.Minute)},
-		}
-		if len(m.messages) > 0 {
-			m.selectedIdx = len(m.messages) - 1
-		}
-	}
 }
 
 // Message types
@@ -250,8 +202,8 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 	}
 
-	// If not in demo mode, start the Telegram client
-	if !m.demoMode {
+	// Only start the Telegram client if we have credentials
+	if m.currentView != ViewSetup {
 		cmds = append(cmds, m.startTelegramClient())
 	}
 
@@ -788,6 +740,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Handle based on current view
 	switch m.currentView {
+	case ViewSetup:
+		return m.handleSetupKey(msg)
 	case ViewAuth:
 		return m.handleAuthKey(msg)
 	case ViewChatList:
@@ -796,6 +750,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleChatKey(msg)
 	case ViewSwitcher:
 		return m.handleSwitcherKey(msg)
+	}
+
+	return m, nil
+}
+
+func (m Model) handleSetupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	if key == "q" {
+		m.quitting = true
+		return m, tea.Quit
 	}
 
 	return m, nil
@@ -810,16 +775,6 @@ func (m Model) handleAuthKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			_ = m.telegramClient.Close()
 		}
 		return m, tea.Quit
-	}
-
-	// In demo mode with no credentials, show info
-	if m.demoMode {
-		if key == "d" {
-			// Switch to demo chat view
-			m.currentView = ViewChat
-			m.loadDemoData()
-			return m, nil
-		}
 	}
 
 	// Forward to auth view
@@ -924,10 +879,6 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.messages = nil
 			m.cursorLine = 0
 
-			if m.demoMode {
-				m.loadDemoData()
-				return m, nil
-			}
 			return m, m.loadMessages(m.currentChat.ID)
 		}
 
@@ -998,7 +949,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine -= result.Count
 		m.adjustViewport()
 		// Load more messages when reaching the top
-		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
+		if m.cursorLine == 0 && !m.loadingMore  {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -1007,7 +958,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine = 0
 		m.adjustViewport()
 		// Load more messages when jumping to top
-		if !m.loadingMore && !m.demoMode {
+		if !m.loadingMore  {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -1042,7 +993,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine -= pageSize * result.Count
 		m.adjustViewport()
 		// Load more messages when reaching the top
-		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
+		if m.cursorLine == 0 && !m.loadingMore  {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -1068,7 +1019,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorLine -= pageSize * result.Count
 		m.adjustViewport()
 		// Load more messages when reaching the top
-		if m.cursorLine == 0 && !m.loadingMore && !m.demoMode {
+		if m.cursorLine == 0 && !m.loadingMore  {
 			m.loadingMore = true
 			return m, m.loadMoreMessages()
 		}
@@ -1232,30 +1183,11 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 
 	// Clear input and reply state
 	m.input.Reset()
-	replyingTo := m.replyingTo
 	m.replyingTo = nil
 
 	// Stay in insert mode to allow sending multiple messages
 
-	// Send message
-	if m.demoMode {
-		// Demo mode: just add to list
-		newMsg := &Message{
-			ID:     int64(len(m.messages) + 1),
-			Sender: "You",
-			Text:   text,
-			IsOwn:  true,
-			Time:   time.Now(),
-		}
-		if replyingTo != nil {
-			newMsg.ReplyToMsg = replyingTo
-		}
-		return m, func() tea.Msg {
-			return messageSentMsg{message: newMsg}
-		}
-	}
-
-	// Real mode: send via client
+	// Send message via client
 	chatID := m.currentChat.ID
 	return m, func() tea.Msg {
 		if m.telegramClient == nil {
@@ -1311,10 +1243,6 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			if m.demoMode {
-				m.loadDemoData()
-				return m, nil
-			}
 			return m, m.loadMessages(m.currentChat.ID)
 		}
 		return m, nil
@@ -1355,8 +1283,10 @@ func (m Model) View() string {
 	}
 
 	switch m.currentView {
+	case ViewSetup:
+		return m.viewSetup()
 	case ViewAuth:
-		return m.viewAuth()
+		return m.authView.View()
 	case ViewChatList:
 		return m.viewChatList()
 	case ViewChat:
@@ -1368,14 +1298,7 @@ func (m Model) View() string {
 	return "Unknown view"
 }
 
-func (m Model) viewAuth() string {
-	if m.demoMode {
-		return m.viewDemoWelcome()
-	}
-	return m.authView.View()
-}
-
-func (m Model) viewDemoWelcome() string {
+func (m Model) viewSetup() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("39")).
@@ -1388,20 +1311,36 @@ func (m Model) viewDemoWelcome() string {
 		Foreground(lipgloss.Color("214")).
 		Bold(true)
 
+	codeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("42"))
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("tlgram - Terminal Telegram Client"),
 		"",
-		highlightStyle.Render("Demo Mode"),
+		highlightStyle.Render("Setup Required"),
 		"",
 		"No Telegram API credentials found.",
 		"",
-		infoStyle.Render("To use with Telegram:"),
-		infoStyle.Render("1. Go to https://my.telegram.org/apps"),
-		infoStyle.Render("2. Create an application"),
-		infoStyle.Render("3. Add api_id and api_hash to ~/.config/tlgram/config.toml"),
+		infoStyle.Render("To use tlgram, you need API credentials from Telegram:"),
 		"",
-		highlightStyle.Render("Press 'd' to try demo mode"),
-		infoStyle.Render("Press 'q' to quit"),
+		"1. Go to "+highlightStyle.Render("https://my.telegram.org/apps"),
+		"2. Log in with your phone number",
+		"3. Create an application (any name works)",
+		"4. Note your "+codeStyle.Render("api_id")+" and "+codeStyle.Render("api_hash"),
+		"",
+		infoStyle.Render("Then add them to your environment. Recommended approach:"),
+		"",
+		"Create "+codeStyle.Render("~/.secrets")+" file (don't commit to git):",
+		codeStyle.Render("  export TLGRAM_API_ID=12345678"),
+		codeStyle.Render("  export TLGRAM_API_HASH=\"your_api_hash\""),
+		"",
+		"Source it from your shell rc file:",
+		codeStyle.Render("  # In ~/.bashrc or ~/.zshrc"),
+		codeStyle.Render("  [ -f ~/.secrets ] && source ~/.secrets"),
+		"",
+		infoStyle.Render("Alternative: Add directly to ~/.config/tlgram/config.toml"),
+		"",
+		highlightStyle.Render("Press 'q' to quit"),
 	)
 }
 

@@ -5,15 +5,18 @@ before:
     - go mod tidy
 
 builds:
-  - id: tlgram-linux
+  - id: tlgram
     main: ./cmd/tlgram
     binary: tlgram
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     goos:
       - linux
+      - darwin
+      - windows
     goarch:
       - amd64
+      - arm64
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -26,10 +29,12 @@ archives:
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
     files:
       - README.md
       - LICENSE
-      - PLAN.md
 
 checksum:
   name_template: 'checksums.txt'

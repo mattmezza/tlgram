@@ -21,6 +21,11 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 
 Download from [Releases](https://github.com/mattmezza/tlgram/releases).
 
+**Platform Compatibility:**
+- **Linux** - Fully tested and supported
+- **macOS** - Builds available but untested
+- **Windows** - Builds available but untested
+
 ### Build from Source
 
 Requires Go 1.22+.
@@ -38,15 +43,25 @@ go build -o tlgram ./cmd/tlgram
 
 1. **Get Telegram API credentials**
    - Go to https://my.telegram.org/apps
-   - Create an application
+   - Log in with your phone number
+   - Create an application (any name works)
    - Note your `api_id` and `api_hash`
 
 2. **Configure tlgram**
 
-   **Option A: Environment variables** (recommended for dotfiles)
+   **Option A: ~/.secrets file** (recommended - keeps secrets out of dotfiles)
+
+   Create `~/.secrets` (this file should NOT be committed to git):
    ```bash
+   # ~/.secrets
    export TLGRAM_API_ID=12345678
    export TLGRAM_API_HASH="your_api_hash_here"
+   ```
+
+   Source it from your shell rc file:
+   ```bash
+   # Add to ~/.bashrc or ~/.zshrc
+   [ -f ~/.secrets ] && source ~/.secrets
    ```
 
    **Option B: Config file**

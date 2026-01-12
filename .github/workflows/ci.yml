@@ -58,6 +58,12 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
       - uses: actions/checkout@v4
 
@@ -66,18 +72,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # For now, build without TDLib to verify Go code compiles
-      # Full TDLib builds will be done in release workflow
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          go build -tags no_tdlib -ldflags "-X main.version=ci -X main.commit=${{ github.sha }}" -o tlgram-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/tlgram
+          go build -ldflags "-X main.version=ci -X main.commit=${{ github.sha }}" -o tlgram-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/tlgram
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tlgram-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: tlgram-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: tlgram-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
