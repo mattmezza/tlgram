@@ -4,6 +4,11 @@ All notable changes to tlgram will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Mark messages as read up to cursor position (R key in chat view)
+- Mark dialog as unread flag (U key, works in chat view and chat switcher)
+- Visual styling for unread messages (blue bar indicator)
+
 ## [0.1.0] - 2026-01-12
 
 ### Added

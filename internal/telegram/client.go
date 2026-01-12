@@ -294,6 +294,15 @@ func (c *Client) handleUpdate(_ context.Context, update tg.UpdateClass, users []
 				Action: c.convertTypingAction(u.Action),
 			})
 		}
+
+	case *tg.UpdateDialogUnreadMark:
+		if dialogPeer, ok := u.Peer.(*tg.DialogPeer); ok {
+			chatID := c.getPeerID(dialogPeer.Peer)
+			c.sendUpdate(DialogUnreadUpdate{
+				ChatID:       chatID,
+				MarkedUnread: u.Unread,
+			})
+		}
 	}
 }
 
@@ -576,16 +585,22 @@ func (c *Client) extractChatsFromDialogs(users []tg.UserClass, chats []tg.ChatCl
 			if user, ok := userMap[peer.UserID]; ok {
 				chat = c.convertUserToChat(user)
 				chat.UnreadCount = dialog.UnreadCount
+				chat.LastReadInboxID = int64(dialog.ReadInboxMaxID)
+				chat.MarkedUnread = dialog.UnreadMark
 			}
 		case *tg.PeerChat:
 			if ch, ok := chatMap[peer.ChatID]; ok {
 				chat = c.convertChatClass(ch)
 				chat.UnreadCount = dialog.UnreadCount
+				chat.LastReadInboxID = int64(dialog.ReadInboxMaxID)
+				chat.MarkedUnread = dialog.UnreadMark
 			}
 		case *tg.PeerChannel:
 			if ch, ok := chatMap[peer.ChannelID]; ok {
 				chat = c.convertChatClass(ch)
 				chat.UnreadCount = dialog.UnreadCount
+				chat.LastReadInboxID = int64(dialog.ReadInboxMaxID)
+				chat.MarkedUnread = dialog.UnreadMark
 			}
 		}
 
@@ -763,10 +778,48 @@ func (c *Client) SendMessage(chatID int64, text string, replyToID int64) (*Messa
 	}, nil
 }
 
-// MarkAsRead marks messages as read
-func (c *Client) MarkAsRead(chatID int64, messageIDs []int64) error {
-	if c.api == nil || len(messageIDs) == 0 {
+// MarkAsRead marks messages as read up to maxMsgID
+func (c *Client) MarkAsRead(chatID int64, maxMsgID int64) error {
+	if c.api == nil {
 		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+	defer cancel()
+
+	// Check chat type to determine which API to use
+	c.mu.RLock()
+	chat, ok := c.chats[chatID]
+	c.mu.RUnlock()
+
+	if ok && (chat.Type == ChatTypeSupergroup || chat.Type == ChatTypeChannel) {
+		// Use channels.readHistory for channels/supergroups
+		_, err := c.api.ChannelsReadHistory(ctx, &tg.ChannelsReadHistoryRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  chatID,
+				AccessHash: chat.AccessHash,
+			},
+			MaxID: int(maxMsgID),
+		})
+		return err
+	}
+
+	// Use messages.readHistory for private chats and basic groups
+	peer := c.getInputPeer(chatID)
+	if peer == nil {
+		return nil
+	}
+	_, err := c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{
+		Peer:  peer,
+		MaxID: int(maxMsgID),
+	})
+	return err
+}
+
+// MarkDialogUnread marks a dialog as unread (or clears the unread mark)
+func (c *Client) MarkDialogUnread(chatID int64, unread bool) error {
+	if c.api == nil {
+		return fmt.Errorf("client not connected")
 	}
 
 	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
@@ -774,13 +827,15 @@ func (c *Client) MarkAsRead(chatID int64, messageIDs []int64) error {
 
 	peer := c.getInputPeer(chatID)
 	if peer == nil {
-		return nil
+		return fmt.Errorf("unknown chat: %d", chatID)
 	}
 
-	maxID := int(messageIDs[len(messageIDs)-1])
-	_, err := c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{
-		Peer:  peer,
-		MaxID: maxID,
+	// Convert InputPeer to InputDialogPeer
+	dialogPeer := &tg.InputDialogPeer{Peer: peer}
+
+	_, err := c.api.MessagesMarkDialogUnread(ctx, &tg.MessagesMarkDialogUnreadRequest{
+		Peer:   dialogPeer,
+		Unread: unread,
 	})
 	return err
 }

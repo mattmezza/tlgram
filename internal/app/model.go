@@ -90,14 +90,16 @@ type Model struct {
 
 // Chat represents a chat in the list
 type Chat struct {
-	ID          int64
-	Type        telegram.ChatType
-	Name        string
-	Username    string
-	UnreadCount int
-	MemberCount int
-	LastMessage string
-	LastTime    time.Time
+	ID              int64
+	Type            telegram.ChatType
+	Name            string
+	Username        string
+	UnreadCount     int
+	MemberCount     int
+	LastMessage     string
+	LastTime        time.Time
+	LastReadInboxID int64 // Last read message ID (for unread styling)
+	MarkedUnread    bool  // UI flag for "remind me" unread status
 }
 
 // Message represents a chat message
@@ -180,6 +182,17 @@ type moreMessagesLoadedMsg struct {
 
 type messageSentMsg struct {
 	message *Message
+}
+
+type markReadCompleteMsg struct {
+	chatID   int64
+	maxMsgID int64
+	err      error
+}
+
+type markUnreadCompleteMsg struct {
+	chatID int64
+	err    error
 }
 
 type clientStartedMsg struct {
@@ -483,6 +496,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Copy failed: "+msg.err, 2*time.Second)
 		}
 		return m, cmd
+
+	case markReadCompleteMsg:
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Error: "+msg.err.Error(), 3*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Marked as read", 2*time.Second)
+			// Update local state
+			for i, c := range m.chats {
+				if c.ID == msg.chatID {
+					m.chats[i].LastReadInboxID = msg.maxMsgID
+					m.chats[i].UnreadCount = 0
+					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
+						m.currentChat.LastReadInboxID = msg.maxMsgID
+						m.currentChat.UnreadCount = 0
+					}
+					break
+				}
+			}
+		}
+		return m, cmd
+
+	case markUnreadCompleteMsg:
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Error: "+msg.err.Error(), 3*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Marked as unread", 2*time.Second)
+			// Update local state
+			for i, c := range m.chats {
+				if c.ID == msg.chatID {
+					m.chats[i].MarkedUnread = true
+					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
+						m.currentChat.MarkedUnread = true
+					}
+					break
+				}
+			}
+		}
+		return m, cmd
 	}
 
 	return m, tea.Batch(cmds...)
@@ -561,6 +614,19 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 		m.authView.SetError(u.Message)
 		m.authView.SetLoading(false)
 		m.lastError = u.Message
+		return m, nil
+
+	case telegram.DialogUnreadUpdate:
+		// Update unread mark state
+		for i, c := range m.chats {
+			if c.ID == u.ChatID {
+				m.chats[i].MarkedUnread = u.MarkedUnread
+				if m.currentChat != nil && m.currentChat.ID == u.ChatID {
+					m.currentChat.MarkedUnread = u.MarkedUnread
+				}
+				break
+			}
+		}
 		return m, nil
 	}
 
@@ -671,6 +737,28 @@ func (m Model) searchAndOpenChat(username string) tea.Cmd {
 	}
 }
 
+func (m Model) markMessagesAsRead(chatID int64, maxMsgID int64) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		err := m.telegramClient.MarkAsRead(chatID, maxMsgID)
+		return markReadCompleteMsg{chatID: chatID, maxMsgID: maxMsgID, err: err}
+	}
+}
+
+func (m Model) markDialogUnread(chatID int64) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		err := m.telegramClient.MarkDialogUnread(chatID, true)
+		return markUnreadCompleteMsg{chatID: chatID, err: err}
+	}
+}
+
 func convertTelegramChat(c *telegram.Chat) *Chat {
 	name := c.Title
 	// For private chats, use the title (full name) as the primary name
@@ -684,14 +772,16 @@ func convertTelegramChat(c *telegram.Chat) *Chat {
 	}
 
 	return &Chat{
-		ID:          c.ID,
-		Type:        c.Type,
-		Name:        name,
-		Username:    c.Username,
-		UnreadCount: c.UnreadCount,
-		MemberCount: c.MemberCount,
-		LastMessage: lastMsg,
-		LastTime:    lastTime,
+		ID:              c.ID,
+		Type:            c.Type,
+		Name:            name,
+		Username:        c.Username,
+		UnreadCount:     c.UnreadCount,
+		MemberCount:     c.MemberCount,
+		LastMessage:     lastMsg,
+		LastTime:        lastTime,
+		LastReadInboxID: c.LastReadInboxID,
+		MarkedUnread:    c.MarkedUnread,
 	}
 }
 
@@ -1086,6 +1176,19 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case keybind.ActionMarkRead:
+		// Mark messages as read up to cursor position
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx >= 0 && msgIdx < len(m.messages) && m.currentChat != nil {
+			return m, m.markMessagesAsRead(m.currentChat.ID, m.messages[msgIdx].ID)
+		}
+
+	case keybind.ActionMarkUnread:
+		// Mark dialog as unread
+		if m.currentChat != nil {
+			return m, m.markDialogUnread(m.currentChat.ID)
+		}
+
 	case keybind.ActionExitToNormal:
 		m.input.Blur()
 		m.replyingTo = nil
@@ -1210,6 +1313,14 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switcherInput.Reset()
 		m.switcherFiltered = nil
 		m.switcherIdx = 0
+		return m, nil
+
+	case "U":
+		// Mark selected chat as unread from switcher
+		filtered := m.getFilteredChats()
+		if len(filtered) > 0 && m.switcherIdx < len(filtered) {
+			return m, m.markDialogUnread(filtered[m.switcherIdx].ID)
+		}
 		return m, nil
 
 	case "enter":
@@ -1535,6 +1646,7 @@ type messageLine struct {
 	content   string // message content or reply text
 	timestamp string // formatted timestamp (for first line)
 	isOwn     bool   // whether this is own message
+	isUnread  bool   // whether this message is unread (for visual indicator)
 }
 
 // formatRelativeTime formats a time as relative to now
@@ -1591,6 +1703,12 @@ func (m Model) renderMessages(maxHeight int) string {
 	var allLines []messageLine
 
 	for msgIdx, msg := range m.messages {
+		// Determine if message is unread (not own message and ID > last read)
+		isUnread := false
+		if m.currentChat != nil && !msg.IsOwn && msg.ID > m.currentChat.LastReadInboxID {
+			isUnread = true
+		}
+
 		// Reply context (if any)
 		if msg.ReplyToMsg != nil {
 			replySender := msg.ReplyToMsg.Sender
@@ -1605,6 +1723,7 @@ func (m Model) renderMessages(maxHeight int) string {
 				msgIdx:   msgIdx,
 				lineType: 0, // reply
 				content:  fmt.Sprintf("↳ %s: %s", replySender, replyText),
+				isUnread: isUnread,
 			})
 		}
 
@@ -1635,6 +1754,7 @@ func (m Model) renderMessages(maxHeight int) string {
 					content:   wline,
 					timestamp: timestamp,
 					isOwn:     msg.IsOwn,
+					isUnread:  isUnread,
 				})
 			} else {
 				// Continuation line
@@ -1643,6 +1763,7 @@ func (m Model) renderMessages(maxHeight int) string {
 					lineType: 2, // continuation
 					sender:   senderName,
 					content:  wline,
+					isUnread: isUnread,
 				})
 			}
 		}
@@ -1739,13 +1860,20 @@ func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, 
 		textStyle = lipgloss.NewStyle()
 	}
 
+	// Unread marker style (blue bar)
+	unreadMarkerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	unreadPrefix := "  " // Default: no marker (2 spaces for alignment)
+	if line.isUnread {
+		unreadPrefix = unreadMarkerStyle.Render("| ")
+	}
+
 	var result string
 
 	switch line.lineType {
 	case 0: // Reply line
 		// Indent reply to align with message content
-		replyIndent := strings.Repeat(" ", maxSenderLen+2)
-		result = textStyle.Render(replyIndent) + replyStyle.Render(line.content)
+		replyIndent := strings.Repeat(" ", maxSenderLen)
+		result = unreadPrefix + textStyle.Render(replyIndent) + replyStyle.Render(line.content)
 
 	case 1: // First line with sender and timestamp
 		// Right-align sender name by padding on the left
@@ -1760,17 +1888,17 @@ func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, 
 		// Calculate padding for right-aligned timestamp (use displayWidth for emoji support)
 		contentDisplayWidth := displayWidth(line.content)
 		timestampDisplayWidth := displayWidth(line.timestamp)
-		baseLen := maxSenderLen + 2 + contentDisplayWidth
+		baseLen := maxSenderLen + 2 + contentDisplayWidth + 2 // +2 for unread marker
 		padding := contentWidth - baseLen - timestampDisplayWidth
 		if padding < 1 {
 			padding = 1
 		}
 
-		result = textStyle.Render(senderPadding) + styledSender + textStyle.Render(": "+line.content+strings.Repeat(" ", padding)) + timeStyle.Render(line.timestamp)
+		result = unreadPrefix + textStyle.Render(senderPadding) + styledSender + textStyle.Render(": "+line.content+strings.Repeat(" ", padding)) + timeStyle.Render(line.timestamp)
 
 	case 2: // Continuation line
-		indent := strings.Repeat(" ", maxSenderLen+2)
-		result = textStyle.Render(indent + line.content)
+		indent := strings.Repeat(" ", maxSenderLen)
+		result = unreadPrefix + textStyle.Render(indent+line.content)
 	}
 
 	// Pad to full width for cursor line

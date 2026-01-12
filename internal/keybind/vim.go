@@ -60,6 +60,8 @@ const (
 	ActionCancel
 	ActionQuit
 	ActionToggleUsername
+	ActionMarkRead   // R - mark messages as read up to cursor
+	ActionMarkUnread // U - mark dialog as unread
 )
 
 // Result holds the action and any associated count
@@ -191,6 +193,12 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "u":
 		v.reset()
 		return Result{Action: ActionToggleUsername}
+	case "R":
+		v.reset()
+		return Result{Action: ActionMarkRead}
+	case "U":
+		v.reset()
+		return Result{Action: ActionMarkUnread}
 	case "d":
 		v.reset()
 		return Result{Action: ActionDownload}

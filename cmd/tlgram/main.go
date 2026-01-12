@@ -131,8 +131,10 @@ VIM KEYBINDINGS:
     i           Enter INSERT mode (compose message)
     Escape      Return to NORMAL mode
     r           Reply to selected message
+    R           Mark messages as read up to cursor
     yy          Copy message to clipboard
     u           Toggle full names / @usernames
+    U           Mark dialog as unread
     Ctrl-p      Open chat switcher
     q           Quit application
 

@@ -167,8 +167,10 @@ tlgram --changelog         # Show changelog
 | `Enter` | Select / Open chat |
 | `Ctrl-p` | Open chat switcher |
 | `r` | Reply to message at cursor |
+| `R` | Mark messages as read up to cursor |
 | `yy` | Copy message at cursor to clipboard |
 | `u` | Toggle between full names and @usernames |
+| `U` | Mark dialog as unread |
 | `d` | Download media |
 | `q` | Quit |
 
@@ -180,6 +182,7 @@ tlgram --changelog         # Show changelog
 | `Ctrl-n` | Navigate down |
 | `Ctrl-p` | Navigate up |
 | `Enter` | Select chat |
+| `U` | Mark selected chat as unread |
 | `Escape` | Close switcher |
 | Type | Filter chats by name or @username |
 

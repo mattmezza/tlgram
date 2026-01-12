@@ -65,15 +65,17 @@ func (s ConnectionState) String() string {
 
 // Chat represents a Telegram chat
 type Chat struct {
-	ID            int64
-	AccessHash    int64 // Required for channels/supergroups
-	Type          ChatType
-	Title         string
-	Username      string
-	UnreadCount   int
-	MemberCount   int
-	LastMessage   *Message
-	LastMessageAt time.Time
+	ID              int64
+	AccessHash      int64 // Required for channels/supergroups
+	Type            ChatType
+	Title           string
+	Username        string
+	UnreadCount     int
+	MemberCount     int
+	LastMessage     *Message
+	LastMessageAt   time.Time
+	LastReadInboxID int64 // Last read incoming message ID (for unread styling)
+	MarkedUnread    bool  // UI flag for "remind me" unread status
 }
 
 // ChatType represents the type of chat

@@ -59,6 +59,14 @@ type ChatReadUpdate struct {
 
 func (ChatReadUpdate) isUpdate() {}
 
+// DialogUnreadUpdate is sent when a dialog's unread flag changes
+type DialogUnreadUpdate struct {
+	ChatID       int64
+	MarkedUnread bool
+}
+
+func (DialogUnreadUpdate) isUpdate() {}
+
 // TypingUpdate is sent when a user starts/stops typing
 type TypingUpdate struct {
 	ChatID   int64
