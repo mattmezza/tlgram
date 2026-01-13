@@ -657,6 +657,7 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 					m.cursorLine = m.getTotalLines() - 1
 					m.newMsgCount = 0 // Reset counter when at bottom
 					m.firstNewMsgID = 0
+					m.adjustViewport() // Actually scroll the viewport
 				} else {
 					// Track new message count when scrolled up
 					if m.newMsgCount == 0 {
@@ -1248,6 +1249,19 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Don't call adjustViewport - we're moving within viewport
 
 	case keybind.ActionEnterInsert:
+		m.statusBar.SetMode(keybind.ModeInsert)
+		return m, m.input.Focus()
+
+	case keybind.ActionAppend:
+		// Scroll to bottom and enter insert mode (vim 'A' behavior)
+		totalLines := m.getTotalLines()
+		m.cursorLine = totalLines - 1
+		if m.cursorLine < 0 {
+			m.cursorLine = 0
+		}
+		m.newMsgCount = 0
+		m.firstNewMsgID = 0
+		m.adjustViewport()
 		m.statusBar.SetMode(keybind.ModeInsert)
 		return m, m.input.Focus()
 

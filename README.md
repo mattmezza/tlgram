@@ -159,6 +159,7 @@ tlgram --default-config    # Print default config (useful for resetting)
 | Key | Action |
 |-----|--------|
 | `i` | Enter INSERT mode (compose message) |
+| `A` | Jump to bottom and enter INSERT mode |
 | `Escape` | Return to NORMAL mode |
 
 #### Actions (NORMAL mode)

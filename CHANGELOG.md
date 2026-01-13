@@ -4,6 +4,12 @@ All notable changes to tlgram will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `A` key to jump to bottom and enter INSERT mode (vim-style append)
+
+### Fixed
+- Auto-scroll now works when at bottom of chat (viewport follows new messages)
+
 ## [0.2] - 2026-01-13
 
 ### Added

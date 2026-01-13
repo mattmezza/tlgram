@@ -127,6 +127,7 @@ VIM KEYBINDINGS:
     gg/G        Jump to top/bottom
     Ctrl-d/u    Scroll half page down/up
     i           Enter INSERT mode (compose message)
+    A           Jump to bottom and enter INSERT mode
     Escape      Return to NORMAL mode
     r           Reply to selected message
     R           Mark messages as read up to cursor

@@ -65,6 +65,7 @@ const (
 	ActionJumpToOriginal // o - jump to original message (for replies)
 	ActionJumpBack       // ctrl+o - jump back after jumping to original
 	ActionShowChatID     // I - toggle chat ID display in header
+	ActionAppend         // A - scroll to bottom and enter insert mode
 )
 
 // Result holds the action and any associated count
@@ -214,6 +215,9 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "I":
 		v.reset()
 		return Result{Action: ActionShowChatID}
+	case "A":
+		v.reset()
+		return Result{Action: ActionAppend}
 	case "ctrl+p":
 		v.reset()
 		return Result{Action: ActionOpenSwitcher}
