@@ -1766,7 +1766,7 @@ func (m Model) viewSwitcher() string {
 	}
 
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Type to search • Ctrl-n/p: navigate • Ctrl-r/u: read/unread • Enter: select • Esc: close"))
+	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Ctrl-n/p: navigate • Ctrl-r/u: read/unread • Enter: select • Esc: close"))
 
 	box := boxStyle.Render(content.String())
 
