@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,12 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/pflag"
 
+	"github.com/mattmezza/tlgram"
 	"github.com/mattmezza/tlgram/internal/app"
 	"github.com/mattmezza/tlgram/internal/config"
 )
-
-//go:embed changelog.txt
-var changelogFS embed.FS
 
 var (
 	version = "dev"
@@ -76,14 +73,7 @@ func main() {
 }
 
 func printChangelog() {
-	content, err := changelogFS.ReadFile("changelog.txt")
-	if err != nil {
-		fmt.Println("Changelog not available in this build.")
-		fmt.Printf("\nRead the full changelog at: %s\n", changelogURL)
-		return
-	}
-
-	lines := strings.Split(string(content), "\n")
+	lines := strings.Split(tlgram.Changelog, "\n")
 	truncated := false
 
 	if len(lines) > changelogMaxLines {
