@@ -73,6 +73,9 @@ type Model struct {
 	// Reply state
 	replyingTo *Message
 
+	// Edit state
+	editingMessage *Message // Message being edited (nil if composing new)
+
 	// Cursor state (line-based navigation)
 	cursorLine    int // Which visual line the cursor is on (0-indexed)
 	viewportStart int // First visible line in viewport
@@ -214,6 +217,19 @@ type markFullyReadCompleteMsg struct {
 
 type autoMarkReadTickMsg struct {
 	chatID int64 // Which chat this tick is for (to ignore stale ticks)
+}
+
+type editMessageCompleteMsg struct {
+	chatID    int64
+	messageID int64
+	newText   string
+	err       error
+}
+
+type deleteMessageCompleteMsg struct {
+	chatID    int64
+	messageID int64
+	err       error
 }
 
 type clientStartedMsg struct {
@@ -646,6 +662,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.markChatFullyRead(msg.chatID)
 		}
 		return m, nil
+
+	case editMessageCompleteMsg:
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Edit failed: "+msg.err.Error(), 3*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Message edited", 2*time.Second)
+			// Update local message text
+			for i, message := range m.messages {
+				if message.ID == msg.messageID {
+					m.messages[i].Text = msg.newText
+					break
+				}
+			}
+		}
+		return m, cmd
+
+	case deleteMessageCompleteMsg:
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Delete failed: "+msg.err.Error(), 3*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Message deleted", 2*time.Second)
+			// Remove message from local list
+			for i, message := range m.messages {
+				if message.ID == msg.messageID {
+					m.messages = append(m.messages[:i], m.messages[i+1:]...)
+					// Adjust cursor if needed
+					if m.cursorLine >= m.getTotalLines() && m.cursorLine > 0 {
+						m.cursorLine = m.getTotalLines() - 1
+					}
+					break
+				}
+			}
+		}
+		return m, cmd
 	}
 
 	return m, tea.Batch(cmds...)
@@ -924,6 +976,28 @@ func (m *Model) sortChatsByRecent() {
 	sort.Slice(m.chats, func(i, j int) bool {
 		return m.chats[i].LastTime.After(m.chats[j].LastTime)
 	})
+}
+
+func (m Model) editMessage(chatID int64, messageID int64, newText string) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		err := m.telegramClient.EditMessage(chatID, messageID, newText)
+		return editMessageCompleteMsg{chatID: chatID, messageID: messageID, newText: newText, err: err}
+	}
+}
+
+func (m Model) deleteMessage(chatID int64, messageID int64) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		err := m.telegramClient.DeleteMessages(chatID, []int64{messageID}, true)
+		return deleteMessageCompleteMsg{chatID: chatID, messageID: messageID, err: err}
+	}
 }
 
 // startAutoMarkReadTimer starts a timer to auto-mark messages as read
@@ -1395,6 +1469,43 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+	case keybind.ActionEditMessage:
+		// Edit message at cursor (only own messages)
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx >= 0 && msgIdx < len(m.messages) {
+			msg := m.messages[msgIdx]
+			if !msg.IsOwn {
+				var cmd tea.Cmd
+				m.statusBar, cmd = m.statusBar.ShowNotification("Can only edit own messages", 2*time.Second)
+				return m, cmd
+			}
+			if msg.Text == "" {
+				var cmd tea.Cmd
+				m.statusBar, cmd = m.statusBar.ShowNotification("Cannot edit: no text", 2*time.Second)
+				return m, cmd
+			}
+			// Enter edit mode
+			m.editingMessage = msg
+			m.input.SetValue(msg.Text)
+			m.vim.SetMode(keybind.ModeInsert)
+			m.statusBar.SetMode(keybind.ModeInsert)
+			return m, m.input.Focus()
+		}
+
+	case keybind.ActionDeleteMessage:
+		// Delete message at cursor (only own messages)
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx >= 0 && msgIdx < len(m.messages) {
+			msg := m.messages[msgIdx]
+			if !msg.IsOwn {
+				var cmd tea.Cmd
+				m.statusBar, cmd = m.statusBar.ShowNotification("Can only delete own messages", 2*time.Second)
+				return m, cmd
+			}
+			// Delete immediately (Telegram allows deletion of own messages)
+			return m, m.deleteMessage(m.currentChat.ID, msg.ID)
+		}
+
 	case keybind.ActionOpenSwitcher:
 		m.prevView = m.currentView
 		m.currentView = ViewSwitcher
@@ -1465,7 +1576,9 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case keybind.ActionExitToNormal:
 		m.input.Blur()
+		m.input.Reset() // Clear input when exiting edit/reply mode
 		m.replyingTo = nil
+		m.editingMessage = nil
 		m.statusBar.SetMode(keybind.ModeNormal)
 	}
 
@@ -1578,6 +1691,16 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	chatID := m.currentChat.ID
+
+	// Handle edit mode
+	if m.editingMessage != nil {
+		messageID := m.editingMessage.ID
+		m.input.Reset()
+		m.editingMessage = nil
+		return m, m.editMessage(chatID, messageID, text)
+	}
+
 	var replyToID int64
 	if m.replyingTo != nil {
 		replyToID = m.replyingTo.ID
@@ -1590,7 +1713,6 @@ func (m Model) sendMessage() (Model, tea.Cmd) {
 	// Stay in insert mode to allow sending multiple messages
 
 	// Send message via client
-	chatID := m.currentChat.ID
 	return m, func() tea.Msg {
 		if m.telegramClient == nil {
 			return nil

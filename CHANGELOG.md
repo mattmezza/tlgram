@@ -8,6 +8,8 @@ All notable changes to tlgram will be documented in this file.
 - `A` key to jump to bottom and enter INSERT mode (vim-style append)
 - Real-time chat list updates (unread count, last message, reordering by activity)
 - Auto-mark messages as read with configurable delay (`auto_mark_read` config option)
+- Edit own messages with `cc` key (vim-style change)
+- Delete own messages with `dd` key (vim-style delete)
 
 ### Fixed
 - Auto-scroll now works when at bottom of chat (viewport follows new messages)

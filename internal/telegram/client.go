@@ -778,6 +778,68 @@ func (c *Client) SendMessage(chatID int64, text string, replyToID int64) (*Messa
 	}, nil
 }
 
+// EditMessage edits a message in a chat
+func (c *Client) EditMessage(chatID int64, messageID int64, newText string) error {
+	if c.api == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	peer := c.getInputPeer(chatID)
+	if peer == nil {
+		return fmt.Errorf("unknown chat: %d", chatID)
+	}
+
+	_, err := c.api.MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{
+		Peer:    peer,
+		ID:      int(messageID),
+		Message: newText,
+	})
+	return err
+}
+
+// DeleteMessages deletes messages from a chat
+func (c *Client) DeleteMessages(chatID int64, messageIDs []int64, revoke bool) error {
+	if c.api == nil || len(messageIDs) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	// Convert int64 to int
+	ids := make([]int, len(messageIDs))
+	for i, id := range messageIDs {
+		ids[i] = int(id)
+	}
+
+	// Check chat type to determine which API to use
+	c.mu.RLock()
+	chat, ok := c.chats[chatID]
+	c.mu.RUnlock()
+
+	if ok && (chat.Type == ChatTypeSupergroup || chat.Type == ChatTypeChannel) {
+		// Use channels.deleteMessages for channels/supergroups
+		_, err := c.api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  chatID,
+				AccessHash: chat.AccessHash,
+			},
+			ID: ids,
+		})
+		return err
+	}
+
+	// Use messages.deleteMessages for private chats and basic groups
+	_, err := c.api.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
+		Revoke: revoke, // Delete for everyone if true
+		ID:     ids,
+	})
+	return err
+}
+
 // MarkAsRead marks messages as read up to maxMsgID
 func (c *Client) MarkAsRead(chatID int64, maxMsgID int64) error {
 	if c.api == nil {
