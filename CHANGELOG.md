@@ -13,7 +13,7 @@ All notable changes to tlgram will be documented in this file.
 - Jump back with `Ctrl-o` after jumping to original (vim-style jump stack)
 - Configurable reply preview length (`reply_preview_length` in config)
 
-## [0.1.0] - 2026-01-12
+## [0.1] - 2026-01-12
 
 ### Added
 - Terminal-based Telegram client with vim keybindings
@@ -37,7 +37,7 @@ All notable changes to tlgram will be documented in this file.
 - Bubbletea TUI framework
 - Lipgloss styling
 
-## [0.0.1] - 2026-01-09
+## [0.0] - 2026-01-09
 
 ### Added
 - Initial project structure
