@@ -7,17 +7,10 @@ COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 
-# TDLib paths (adjust as needed)
-TDLIB_DIR ?= /opt/tdlib
-CGO_CFLAGS := -I$(TDLIB_DIR)/include
-CGO_LDFLAGS := -L$(TDLIB_DIR)/lib -ltdjson_static -ltdjson_private -ltdclient -ltdcore -ltdapi -ltdactor -ltddb -ltdsqlite -ltdnet -ltdutils -lstdc++ -lssl -lcrypto -ldl -lz -lm -lpthread
+# Go environment - pure Go, no CGO required
+export CGO_ENABLED=0
 
-# Go environment
-export CGO_ENABLED=1
-export CGO_CFLAGS
-export CGO_LDFLAGS
-
-.PHONY: all build build-static clean test test-race lint fmt vet check run install tdlib docker-tdlib help
+.PHONY: all build build-static clean test test-race lint fmt vet check run install help
 
 # Default target
 all: build
@@ -30,18 +23,6 @@ build:
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/tlgram
 
-# Build without TDLib (for testing UI components)
-build-no-tdlib:
-	@echo "Building $(BINARY_NAME) without TDLib..."
-	@mkdir -p bin
-	CGO_ENABLED=0 go build $(LDFLAGS) -tags no_tdlib -o bin/$(BINARY_NAME) ./cmd/tlgram
-
-# Build fully static binary (for distribution)
-build-static:
-	@echo "Building static $(BINARY_NAME)..."
-	@mkdir -p bin
-	go build $(LDFLAGS) -ldflags "-linkmode external -extldflags '-static'" -o bin/$(BINARY_NAME)-static ./cmd/tlgram
-
 # Cross-compile for different architectures
 build-linux-amd64:
 	@echo "Building for linux/amd64..."
@@ -52,6 +33,24 @@ build-linux-arm64:
 	@echo "Building for linux/arm64..."
 	@mkdir -p bin
 	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-linux-arm64 ./cmd/tlgram
+
+build-darwin-amd64:
+	@echo "Building for darwin/amd64..."
+	@mkdir -p bin
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-darwin-amd64 ./cmd/tlgram
+
+build-darwin-arm64:
+	@echo "Building for darwin/arm64..."
+	@mkdir -p bin
+	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-darwin-arm64 ./cmd/tlgram
+
+build-windows-amd64:
+	@echo "Building for windows/amd64..."
+	@mkdir -p bin
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-windows-amd64.exe ./cmd/tlgram
+
+# Build all platforms
+build-all: build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64 build-windows-amd64
 
 ## Test targets
 
@@ -111,20 +110,6 @@ install: build
 	@echo "Installing $(BINARY_NAME)..."
 	cp bin/$(BINARY_NAME) $(GOPATH)/bin/
 
-## TDLib targets
-
-# Build TDLib locally
-tdlib:
-	@echo "Building TDLib..."
-	./scripts/build-tdlib.sh
-
-# Build TDLib in Docker (reproducible)
-docker-tdlib:
-	@echo "Building TDLib in Docker..."
-	docker build -f Dockerfile.tdlib -t tlgram-tdlib-builder .
-	docker run --rm -v $(PWD)/tdlib-out:/out tlgram-tdlib-builder
-	@echo "TDLib built to tdlib-out/"
-
 ## Utility targets
 
 # Clean build artifacts
@@ -154,10 +139,13 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  build          Build the application"
-	@echo "  build-no-tdlib Build without TDLib (for UI testing)"
-	@echo "  build-static   Build fully static binary"
-	@echo "  build-linux-*  Cross-compile for Linux"
+	@echo "  build              Build the application"
+	@echo "  build-linux-amd64  Cross-compile for Linux amd64"
+	@echo "  build-linux-arm64  Cross-compile for Linux arm64"
+	@echo "  build-darwin-amd64 Cross-compile for macOS amd64"
+	@echo "  build-darwin-arm64 Cross-compile for macOS arm64 (Apple Silicon)"
+	@echo "  build-windows-amd64 Cross-compile for Windows amd64"
+	@echo "  build-all          Build for all platforms"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  test           Run tests"
@@ -173,10 +161,6 @@ help:
 	@echo "Run targets:"
 	@echo "  run            Build and run the application"
 	@echo "  run-chat       Run with CHAT=@username"
-	@echo ""
-	@echo "TDLib targets:"
-	@echo "  tdlib          Build TDLib locally"
-	@echo "  docker-tdlib   Build TDLib in Docker"
 	@echo ""
 	@echo "Utility targets:"
 	@echo "  install        Install to GOPATH/bin"
