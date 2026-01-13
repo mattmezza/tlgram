@@ -117,6 +117,7 @@ OPTIONS:
 EXAMPLES:
     tlgram                     Open chat list
     tlgram --chat @john_doe    Open DM with @john_doe
+    tlgram --chat 1234567890   Open chat by ID (use I key to find ID)
     tlgram --chat work         Open chat aliased as "work" in config
 
 CONFIGURATION:

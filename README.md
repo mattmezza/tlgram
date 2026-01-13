@@ -130,7 +130,7 @@ sudo mv tlgram /usr/local/bin/
 ```bash
 tlgram                     # Open chat switcher
 tlgram --chat @john_doe    # Open DM with @john_doe
-tlgram --chat -100123456   # Open group by ID
+tlgram --chat 1234567890   # Open chat by ID (use I key to find ID)
 tlgram --chat work         # Open chat aliased as "work"
 tlgram --help              # Show help
 tlgram --version           # Show version

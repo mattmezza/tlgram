@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -355,13 +356,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If targetChat is specified, try to find and open it
 		if m.targetChat != "" {
 			resolved := m.config.ResolveAlias(m.targetChat)
+
+			// Check if resolved is a numeric chat ID
+			var targetID int64
+			if id, err := strconv.ParseInt(resolved, 10, 64); err == nil {
+				targetID = id
+			}
+
 			// Remove @ prefix if present for comparison
 			searchName := strings.TrimPrefix(resolved, "@")
 
 			for i, chat := range m.chats {
-				chatUsername := strings.TrimPrefix(chat.Name, "@")
+				// Match by numeric ID
+				if targetID != 0 && chat.ID == targetID {
+					m.chatIdx = i
+					m.currentChat = chat
+					m.currentView = ViewChat
+					m.updateStatusBarForChat()
+					m.input.Blur()
+					m.vim.SetMode(keybind.ModeNormal)
+					m.statusBar.SetMode(keybind.ModeNormal)
+					return m, m.loadMessages(chat.ID)
+				}
+				// Match by username or name
+				chatUsername := strings.TrimPrefix(chat.Username, "@")
 				if strings.EqualFold(chatUsername, searchName) ||
-					strings.EqualFold(chat.Name, resolved) {
+					strings.EqualFold(chat.Name, resolved) ||
+					strings.EqualFold(chat.Username, searchName) {
 					m.chatIdx = i
 					m.currentChat = chat
 					m.currentView = ViewChat
@@ -372,8 +393,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.loadMessages(chat.ID)
 				}
 			}
-			// Chat not found in dialogs, try to search for it
-			return m, m.searchAndOpenChat(resolved)
+			// Chat not found in dialogs, try to search for it (only works for usernames)
+			if targetID == 0 {
+				return m, m.searchAndOpenChat(resolved)
+			}
+			// Numeric ID not found - show error
+			m.statusBar.ShowNotification("Chat not found: "+resolved, 3*time.Second)
 		}
 
 		// No targetChat - stay in switcher mode, set first chat as fallback
