@@ -1503,6 +1503,11 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Cannot edit: no text", 2*time.Second)
 			return m, cmd
 		}
+		if msg.ID == 0 {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("Cannot edit: invalid message ID", 2*time.Second)
+			return m, cmd
+		}
 		// Enter edit mode
 		m.editingMessage = msg
 		m.input.SetValue(msg.Text)

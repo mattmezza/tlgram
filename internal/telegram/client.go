@@ -766,10 +766,39 @@ func (c *Client) SendMessage(chatID int64, text string, replyToID int64) (*Messa
 			IsOutgoing: true,
 			SenderName: "You",
 		}, nil
+	case *tg.Updates:
+		// For groups/channels, find the message in the updates
+		for _, update := range r.Updates {
+			if msgUpdate, ok := update.(*tg.UpdateNewMessage); ok {
+				if msg, ok := msgUpdate.Message.(*tg.Message); ok {
+					return &Message{
+						ID:         int64(msg.ID),
+						ChatID:     chatID,
+						Text:       text,
+						Date:       time.Unix(int64(msg.Date), 0),
+						IsOutgoing: true,
+						SenderName: "You",
+					}, nil
+				}
+			}
+			if msgUpdate, ok := update.(*tg.UpdateNewChannelMessage); ok {
+				if msg, ok := msgUpdate.Message.(*tg.Message); ok {
+					return &Message{
+						ID:         int64(msg.ID),
+						ChatID:     chatID,
+						Text:       text,
+						Date:       time.Unix(int64(msg.Date), 0),
+						IsOutgoing: true,
+						SenderName: "You",
+					}, nil
+				}
+			}
+		}
 	}
 
+	// Fallback - this shouldn't happen but log for debugging
 	return &Message{
-		ID:         time.Now().UnixNano(),
+		ID:         0, // Invalid ID - won't be editable
 		ChatID:     chatID,
 		Text:       text,
 		Date:       time.Now(),
