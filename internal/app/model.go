@@ -1225,6 +1225,17 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		msgIdx := m.getMessageAtCursor()
 		if msgIdx >= 0 && msgIdx < len(m.messages) {
 			m.replyingTo = m.messages[msgIdx]
+			// Scroll viewport down by 1 to account for reply preview line
+			m.viewportStart++
+			totalLines := m.getTotalLines()
+			viewportHeight := m.getViewportHeight()
+			maxViewportStart := totalLines - viewportHeight
+			if maxViewportStart < 0 {
+				maxViewportStart = 0
+			}
+			if m.viewportStart > maxViewportStart {
+				m.viewportStart = maxViewportStart
+			}
 			m.vim.SetMode(keybind.ModeInsert)
 			m.statusBar.SetMode(keybind.ModeInsert)
 			return m, m.input.Focus()
