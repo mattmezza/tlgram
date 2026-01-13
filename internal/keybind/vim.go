@@ -217,6 +217,7 @@ func (v *VimState) processNormalMode(key string) Result {
 		return Result{Action: ActionShowChatID}
 	case "A":
 		v.reset()
+		v.mode = ModeInsert
 		return Result{Action: ActionAppend}
 	case "ctrl+p":
 		v.reset()
