@@ -1367,7 +1367,12 @@ func (m Model) handleInsertMode(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd)
 // adjustTextareaHeight adjusts textarea height based on content
 func (m *Model) adjustTextareaHeight() {
 	const minHeight = 3
-	const maxHeight = 6
+
+	// Max height is half the terminal height
+	maxHeight := m.height / 2
+	if maxHeight < minHeight {
+		maxHeight = minHeight
+	}
 
 	// Count lines in content
 	lineCount := m.input.LineCount()
