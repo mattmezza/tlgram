@@ -1480,40 +1480,56 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case keybind.ActionEditMessage:
 		// Edit message at cursor (only own messages)
-		msgIdx := m.getMessageAtCursor()
-		if msgIdx >= 0 && msgIdx < len(m.messages) {
-			msg := m.messages[msgIdx]
-			if !msg.IsOwn {
-				var cmd tea.Cmd
-				m.statusBar, cmd = m.statusBar.ShowNotification("Can only edit own messages", 2*time.Second)
-				return m, cmd
-			}
-			if msg.Text == "" {
-				var cmd tea.Cmd
-				m.statusBar, cmd = m.statusBar.ShowNotification("Cannot edit: no text", 2*time.Second)
-				return m, cmd
-			}
-			// Enter edit mode
-			m.editingMessage = msg
-			m.input.SetValue(msg.Text)
-			m.vim.SetMode(keybind.ModeInsert)
-			m.statusBar.SetMode(keybind.ModeInsert)
-			return m, m.input.Focus()
+		if m.currentChat == nil {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No chat selected", 2*time.Second)
+			return m, cmd
 		}
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx < 0 || msgIdx >= len(m.messages) {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No message at cursor", 2*time.Second)
+			return m, cmd
+		}
+		msg := m.messages[msgIdx]
+		if !msg.IsOwn {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("Can only edit own messages", 2*time.Second)
+			return m, cmd
+		}
+		if msg.Text == "" {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("Cannot edit: no text", 2*time.Second)
+			return m, cmd
+		}
+		// Enter edit mode
+		m.editingMessage = msg
+		m.input.SetValue(msg.Text)
+		m.vim.SetMode(keybind.ModeInsert)
+		m.statusBar.SetMode(keybind.ModeInsert)
+		return m, m.input.Focus()
 
 	case keybind.ActionDeleteMessage:
 		// Delete message at cursor (only own messages)
-		msgIdx := m.getMessageAtCursor()
-		if msgIdx >= 0 && msgIdx < len(m.messages) {
-			msg := m.messages[msgIdx]
-			if !msg.IsOwn {
-				var cmd tea.Cmd
-				m.statusBar, cmd = m.statusBar.ShowNotification("Can only delete own messages", 2*time.Second)
-				return m, cmd
-			}
-			// Delete immediately (Telegram allows deletion of own messages)
-			return m, m.deleteMessage(m.currentChat.ID, msg.ID)
+		if m.currentChat == nil {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No chat selected", 2*time.Second)
+			return m, cmd
 		}
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx < 0 || msgIdx >= len(m.messages) {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No message at cursor", 2*time.Second)
+			return m, cmd
+		}
+		msg := m.messages[msgIdx]
+		if !msg.IsOwn {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("Can only delete own messages", 2*time.Second)
+			return m, cmd
+		}
+		// Delete immediately (Telegram allows deletion of own messages)
+		return m, m.deleteMessage(m.currentChat.ID, msg.ID)
 
 	case keybind.ActionOpenSwitcher:
 		m.prevView = m.currentView
