@@ -135,7 +135,7 @@ VIM KEYBINDINGS:
     Ctrl-o      Jump back after jumping
     yy          Copy message to clipboard
     cc          Edit own message
-    dd          Delete own message
+    D           Delete own message
     u           Toggle full names / @usernames
     U           Mark dialog as unread
     I           Toggle chat ID display in header

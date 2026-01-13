@@ -174,7 +174,7 @@ tlgram --default-config    # Print default config (useful for resetting)
 | `Ctrl-o` | Jump back after jumping to original |
 | `yy` | Copy message at cursor to clipboard |
 | `cc` | Edit own message at cursor |
-| `dd` | Delete own message at cursor |
+| `D` | Delete own message at cursor |
 | `u` | Toggle between full names and @usernames |
 | `U` | Mark dialog as unread |
 | `I` | Toggle chat ID display in header |

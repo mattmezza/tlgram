@@ -67,7 +67,7 @@ const (
 	ActionShowChatID     // I - toggle chat ID display in header
 	ActionAppend         // A - scroll to bottom and enter insert mode
 	ActionEditMessage    // cc - edit message at cursor
-	ActionDeleteMessage  // dd - delete message at cursor
+	ActionDeleteMessage  // D - delete message at cursor
 )
 
 // Result holds the action and any associated count
@@ -199,7 +199,7 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "cc":
 		v.reset()
 		return Result{Action: ActionEditMessage}
-	case "dd":
+	case "D":
 		v.reset()
 		return Result{Action: ActionDeleteMessage}
 	case "u":
@@ -264,7 +264,7 @@ func (v *VimState) reset() {
 }
 
 func (v *VimState) isPrefixOfKnownSequence(prefix string) bool {
-	knownSequences := []string{"gg", "yy", "cc", "dd"}
+	knownSequences := []string{"gg", "yy", "cc"}
 	for _, seq := range knownSequences {
 		if strings.HasPrefix(seq, prefix) && seq != prefix {
 			return true
