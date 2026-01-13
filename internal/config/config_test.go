@@ -13,24 +13,12 @@ func TestDefault(t *testing.T) {
 		t.Errorf("expected send_key 'ctrl-enter', got %q", cfg.General.SendKey)
 	}
 
-	if cfg.General.AutoMarkRead != true {
-		t.Errorf("expected auto_mark_read true, got %v", cfg.General.AutoMarkRead)
+	if cfg.Appearance.AuthorDisplay != "fullname" {
+		t.Errorf("expected author_display 'fullname', got %q", cfg.Appearance.AuthorDisplay)
 	}
 
-	if cfg.General.InitialMessageCount != 50 {
-		t.Errorf("expected initial_message_count 50, got %d", cfg.General.InitialMessageCount)
-	}
-
-	if cfg.Network.AutoReconnect != true {
-		t.Errorf("expected auto_reconnect true, got %v", cfg.Network.AutoReconnect)
-	}
-
-	if cfg.Network.ReconnectDelay != 2 {
-		t.Errorf("expected reconnect_delay 2, got %d", cfg.Network.ReconnectDelay)
-	}
-
-	if cfg.Logging.Level != "info" {
-		t.Errorf("expected log level 'info', got %q", cfg.Logging.Level)
+	if cfg.Appearance.ReplyPreviewLength != 30 {
+		t.Errorf("expected reply_preview_length 30, got %d", cfg.Appearance.ReplyPreviewLength)
 	}
 }
 
@@ -56,13 +44,6 @@ func TestConfig_Validate(t *testing.T) {
 			name: "invalid send_key",
 			modify: func(c *Config) {
 				c.General.SendKey = "invalid"
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid log level",
-			modify: func(c *Config) {
-				c.Logging.Level = "invalid"
 			},
 			wantErr: true,
 		},

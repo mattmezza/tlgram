@@ -20,22 +20,7 @@ send_key = "ctrl-enter"
 # Download directory for media files
 download_dir = "~/Downloads/tlgram"
 
-# Auto-mark messages as read when viewing chat
-auto_mark_read = true
-
-# Number of messages to load initially
-initial_message_count = 50
-
 [appearance]
-# Show timestamps on all messages (vs. only on focused message)
-always_show_timestamps = false
-
-# Timestamp format (Go time.Time format)
-timestamp_format = "15:04:05"
-
-# Color theme
-theme = "default"
-
 # Author display format: "fullname" or "username"
 # Toggle with 'u' key in chat view
 author_display = "fullname"
@@ -53,13 +38,3 @@ show_chat_id = false
 # work = "@john_doe"
 # project = "-1001234567890"
 # team = "@project_team_group"
-
-[network]
-auto_reconnect = true
-reconnect_delay = 2
-
-[logging]
-level = "info"
-log_file = "~/.config/tlgram/logs/app.log"
-max_size = 10
-max_backups = 3

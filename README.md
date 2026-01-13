@@ -236,13 +236,8 @@ api_hash = "your_api_hash"
 # Send key: "ctrl-enter" (default, allows multi-line with Enter) or "enter"
 send_key = "ctrl-enter"
 download_dir = "~/Downloads/tlgram"
-auto_mark_read = true
-initial_message_count = 50
 
 [appearance]
-always_show_timestamps = false
-timestamp_format = "15:04:05"
-theme = "default"
 # Author display: "fullname" or "username" (toggle with 'u' key)
 author_display = "fullname"
 reply_preview_length = 30
@@ -252,16 +247,6 @@ show_chat_id = false
 [chat_aliases]
 work = "@john_doe"
 team = "-1001234567890"
-
-[network]
-auto_reconnect = true
-reconnect_delay = 2
-
-[logging]
-level = "info"
-log_file = "~/.config/tlgram/logs/app.log"
-max_size = 10
-max_backups = 3
 ```
 
 ## tmux Integration
