@@ -675,8 +675,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editMessageCompleteMsg:
 		var cmd tea.Cmd
 		if msg.err != nil {
-			errMsg := fmt.Sprintf("Edit failed (chat=%d, msg=%d): %s", msg.chatID, msg.messageID, msg.err.Error())
-			m.statusBar, cmd = m.statusBar.ShowNotification(errMsg, 5*time.Second)
+			m.statusBar, cmd = m.statusBar.ShowNotification("Edit failed: "+msg.err.Error(), 3*time.Second)
 		} else {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Message edited", 2*time.Second)
 			// Update local message text
