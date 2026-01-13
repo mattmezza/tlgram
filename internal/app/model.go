@@ -85,7 +85,8 @@ type Model struct {
 	loadingMore bool
 
 	// New messages indicator (when scrolled up)
-	newMsgCount int
+	newMsgCount    int   // count of new messages
+	firstNewMsgID  int64 // ID of first "new" message (to track which are new)
 
 	// Error state
 	lastError string
@@ -413,6 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.adjustViewport()
 		}
 		m.newMsgCount = 0
+		m.firstNewMsgID = 0
 		return m, nil
 
 	case moreMessagesLoadedMsg:
@@ -486,6 +488,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Adjust viewport to show the sent message
 		m.adjustViewport()
 		m.newMsgCount = 0
+		m.firstNewMsgID = 0
 		var cmd tea.Cmd
 		m.statusBar, cmd = m.statusBar.ShowNotification("Sent!", 2*time.Second)
 		cmds = append(cmds, cmd)
@@ -505,27 +508,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Error: "+msg.err.Error(), 3*time.Second)
 		} else {
-			m.statusBar, cmd = m.statusBar.ShowNotification("Marked as read", 2*time.Second)
+			// Count remaining unread messages (after the read position, incoming only)
+			remainingUnread := 0
+			for _, message := range m.messages {
+				if message.ID > msg.maxMsgID && !message.IsOwn {
+					remainingUnread++
+				}
+			}
+
 			// Update local state
 			for i, c := range m.chats {
 				if c.ID == msg.chatID {
 					m.chats[i].LastReadInboxID = msg.maxMsgID
-					m.chats[i].UnreadCount = 0
+					m.chats[i].UnreadCount = remainingUnread
 					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
 						m.currentChat.LastReadInboxID = msg.maxMsgID
-						m.currentChat.UnreadCount = 0
+						m.currentChat.UnreadCount = remainingUnread
 					}
 					break
 				}
 			}
-			// Update new message counter: count messages still newer than what was marked read
-			stillNew := 0
-			for _, message := range m.messages {
-				if message.ID > msg.maxMsgID && !message.IsOwn {
-					stillNew++
+
+			// Update status bar with new unread count
+			m.updateStatusBarForChat()
+
+			// Also update new message counter if we were tracking new messages
+			if m.newMsgCount > 0 {
+				m.newMsgCount = remainingUnread
+				if m.newMsgCount == 0 {
+					m.firstNewMsgID = 0
 				}
 			}
-			m.newMsgCount = stillNew
+
+			m.statusBar, cmd = m.statusBar.ShowNotification("Marked as read", 2*time.Second)
 		}
 		return m, cmd
 
@@ -586,8 +601,12 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 				if wasAtBottom {
 					m.cursorLine = m.getTotalLines() - 1
 					m.newMsgCount = 0 // Reset counter when at bottom
+					m.firstNewMsgID = 0
 				} else {
 					// Track new message count when scrolled up
+					if m.newMsgCount == 0 {
+						m.firstNewMsgID = msg.ID // Track where "new" messages start
+					}
 					m.newMsgCount++
 				}
 			}
@@ -980,6 +999,8 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Clear messages and reset cursor for new chat
 			m.messages = nil
 			m.cursorLine = 0
+			m.newMsgCount = 0
+			m.firstNewMsgID = 0
 
 			return m, m.loadMessages(m.currentChat.ID)
 		}
@@ -1044,6 +1065,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		totalLines := m.getTotalLines()
 		if m.cursorLine >= totalLines-1 {
 			m.newMsgCount = 0
+			m.firstNewMsgID = 0
 		}
 
 	case keybind.ActionMoveUp:
@@ -1071,6 +1093,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if totalLines > 0 {
 			m.cursorLine = totalLines - 1
 			m.newMsgCount = 0 // Reset new message counter
+			m.firstNewMsgID = 0
 		}
 		m.adjustViewport()
 
@@ -1085,6 +1108,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		totalLines := m.getTotalLines()
 		if m.cursorLine >= totalLines-1 {
 			m.newMsgCount = 0
+			m.firstNewMsgID = 0
 		}
 
 	case keybind.ActionHalfPageUp:
@@ -1111,6 +1135,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		totalLines := m.getTotalLines()
 		if m.cursorLine >= totalLines-1 {
 			m.newMsgCount = 0
+			m.firstNewMsgID = 0
 		}
 
 	case keybind.ActionPageUp:
@@ -1143,6 +1168,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Reset new message counter if at bottom
 		if m.cursorLine >= totalLines-1 {
 			m.newMsgCount = 0
+			m.firstNewMsgID = 0
 		}
 		// Don't call adjustViewport - we're moving within viewport
 
@@ -1393,6 +1419,8 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Clear messages and reset cursor for new chat
 			m.messages = nil
 			m.cursorLine = 0
+			m.newMsgCount = 0
+			m.firstNewMsgID = 0
 
 			// Find the index in the main chat list
 			for i, c := range m.chats {
