@@ -66,8 +66,10 @@ type Model struct {
 	chatName     string
 	chatUsername string
 	chatType     telegram.ChatType
+	chatID       int64
 	memberCount  int
 	unreadCount  int
+	showChatID   bool
 	connState    telegram.ConnectionState
 	notification string
 	notifyUntil  time.Time
@@ -110,6 +112,16 @@ func (m *Model) SetChatInfo(name, username string, chatType telegram.ChatType, m
 // SetUnreadCount updates just the unread count
 func (m *Model) SetUnreadCount(count int) {
 	m.unreadCount = count
+}
+
+// SetChatID sets the chat ID for display
+func (m *Model) SetChatID(id int64) {
+	m.chatID = id
+}
+
+// SetShowChatID sets whether to display the chat ID
+func (m *Model) SetShowChatID(show bool) {
+	m.showChatID = show
 }
 
 // SetConnectionState sets the connection state
@@ -181,6 +193,11 @@ func (m Model) View() string {
 		}
 	default:
 		chatView = chatNameStyle.Render(m.chatName)
+	}
+
+	// Add chat ID if enabled
+	if m.showChatID && m.chatID != 0 {
+		chatView += " " + chatInfoStyle.Render(fmt.Sprintf("ID: %d", m.chatID))
 	}
 
 	// Build right side: unread indicator, notification, or connection state

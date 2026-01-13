@@ -44,6 +44,7 @@ type AppearanceConfig struct {
 	Theme                string `toml:"theme"`
 	AuthorDisplay        string `toml:"author_display"`       // "fullname" or "username"
 	ReplyPreviewLength   int    `toml:"reply_preview_length"` // max chars for reply preview
+	ShowChatID           bool   `toml:"show_chat_id"`         // show chat ID in header
 }
 
 // KeybindingsConfig contains keybinding settings
@@ -94,6 +95,7 @@ func Default() *Config {
 			Theme:                "default",
 			AuthorDisplay:        "fullname",
 			ReplyPreviewLength:   30,
+			ShowChatID:           false,
 		},
 		ChatAliases: make(map[string]string),
 		Keybindings: KeybindingsConfig{
@@ -269,6 +271,10 @@ author_display = "fullname"
 
 # Maximum characters to show in reply preview
 reply_preview_length = 30
+
+# Show chat ID in header bar (useful for creating aliases)
+# Toggle with 'I' key in chat view
+show_chat_id = false
 
 [chat_aliases]
 # Define shortcuts for your frequent chats

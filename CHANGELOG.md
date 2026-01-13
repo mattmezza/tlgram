@@ -4,6 +4,10 @@ All notable changes to tlgram will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Toggle chat ID display in header with `I` key (useful for creating aliases)
+- Config option `show_chat_id` to always show chat ID in header
+
 ## [0.1] - 2026-01-13
 
 ### Added

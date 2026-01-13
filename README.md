@@ -173,6 +173,7 @@ tlgram --changelog         # Show changelog
 | `yy` | Copy message at cursor to clipboard |
 | `u` | Toggle between full names and @usernames |
 | `U` | Mark dialog as unread |
+| `I` | Toggle chat ID display in header |
 | `d` | Download media |
 | `q` | Quit |
 

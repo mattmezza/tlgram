@@ -80,6 +80,7 @@ type Model struct {
 
 	// Display preferences
 	showUsernames bool // Toggle between full name and @username
+	showChatID    bool // Toggle chat ID display in header
 
 	// Loading state
 	loadingMore bool
@@ -151,6 +152,7 @@ func New(cfg *config.Config, targetChat string) Model {
 		chats:         make([]*Chat, 0),
 		messages:      make([]*Message, 0),
 		showUsernames: cfg.Appearance.AuthorDisplay == "username",
+		showChatID:    cfg.Appearance.ShowChatID,
 	}
 
 	// Show setup screen if no credentials, otherwise auth screen
@@ -880,6 +882,8 @@ func convertTelegramMessage(m *telegram.Message) *Message {
 func (m *Model) updateStatusBarForChat() {
 	if m.currentChat == nil {
 		m.statusBar.SetChatName("tlgram")
+		m.statusBar.SetChatID(0)
+		m.statusBar.SetShowChatID(false)
 		return
 	}
 	m.statusBar.SetChatInfo(
@@ -889,6 +893,8 @@ func (m *Model) updateStatusBarForChat() {
 		m.currentChat.MemberCount,
 		m.currentChat.UnreadCount,
 	)
+	m.statusBar.SetChatID(m.currentChat.ID)
+	m.statusBar.SetShowChatID(m.showChatID)
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1268,6 +1274,11 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Showing full names", 1*time.Second)
 		}
 		return m, cmd
+
+	case keybind.ActionShowChatID:
+		m.showChatID = !m.showChatID
+		m.updateStatusBarForChat()
+		return m, nil
 
 	case keybind.ActionMarkRead:
 		// Mark messages as read up to cursor position
@@ -2013,6 +2024,10 @@ func (m Model) renderMessages(maxHeight int) string {
 		newMsgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 		scrollInfo = scrollInfo + " " + newMsgStyle.Render(fmt.Sprintf("(%d new)", m.newMsgCount))
 	}
+
+	// Add hint for chat ID toggle
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	scrollInfo = scrollInfo + hintStyle.Render(" ─ I: show ID")
 
 	visibleLines = append(visibleLines, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(scrollInfo))
 

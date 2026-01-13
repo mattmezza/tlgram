@@ -137,6 +137,7 @@ VIM KEYBINDINGS:
     yy          Copy message to clipboard
     u           Toggle full names / @usernames
     U           Mark dialog as unread
+    I           Toggle chat ID display in header
     Ctrl-p      Open chat switcher
     q           Quit application
 
