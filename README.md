@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/assets/banner.png" alt="tlgram banner" />
+</p>
+
 # tlgram
 
 A terminal-based Telegram client with vim keybindings, designed for tmux workflows.
