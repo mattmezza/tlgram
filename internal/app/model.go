@@ -635,14 +635,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Error: "+msg.err.Error(), 3*time.Second)
 		} else {
 			m.statusBar, cmd = m.statusBar.ShowNotification("Marked as read", 2*time.Second)
+			// Find max message ID to update LastReadInboxID
+			var maxMsgID int64
+			for _, message := range m.messages {
+				if message.ID > maxMsgID {
+					maxMsgID = message.ID
+				}
+			}
 			// Update local state - clear unread count and marked unread flag
 			for i, c := range m.chats {
 				if c.ID == msg.chatID {
 					m.chats[i].UnreadCount = 0
 					m.chats[i].MarkedUnread = false
+					m.chats[i].LastReadInboxID = maxMsgID
 					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
 						m.currentChat.UnreadCount = 0
 						m.currentChat.MarkedUnread = false
+						m.currentChat.LastReadInboxID = maxMsgID
 					}
 					break
 				}
