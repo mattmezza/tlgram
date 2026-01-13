@@ -278,18 +278,19 @@ tmux split-window -h "tlgram --chat team"
 
 ### With hop
 
-If you use [hop](https://github.com/mattmezza/hop) for tmux templates:
+If you use [hop](https://github.com/mattmezza/hop) for tmux session templates, add a `.tmux-session` file to your project:
 
-```yaml
-# ~/.config/hop/templates/project.yml
-windows:
-  - name: code
-    panes:
-      - nvim
-  - name: telegram
-    panes:
-      - tlgram --chat work
-      - tlgram --chat team
+```bash
+#!/usr/bin/env bash
+# .tmux-session - hop will source this when starting the session
+
+tmux rename-window -t "$SESSION_NAME:1" "code"
+tmux send-keys -t "$SESSION_NAME:1" "nvim ." C-m
+
+tmux new-window -t "$SESSION_NAME" -n "telegram"
+tmux send-keys -t "$SESSION_NAME:telegram" "tlgram -c work" C-m
+
+tmux select-window -t "$SESSION_NAME:1"
 ```
 
 ## Building
