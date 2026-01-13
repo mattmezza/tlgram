@@ -237,6 +237,8 @@ api_hash = "your_api_hash"
 # Send key: "ctrl-enter" (default, allows multi-line with Enter) or "enter"
 send_key = "ctrl-enter"
 download_dir = "~/Downloads/tlgram"
+# Auto-mark messages as read: -1=disabled (default), 0=instant, >0=delay in seconds
+auto_mark_read = -1
 
 [appearance]
 # Author display: "fullname" or "username" (toggle with 'u' key)

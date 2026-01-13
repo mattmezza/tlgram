@@ -20,6 +20,12 @@ send_key = "ctrl-enter"
 # Download directory for media files
 download_dir = "~/Downloads/tlgram"
 
+# Auto-mark messages as read when viewing chat
+# -1 = disabled (manual only with 'R' key)
+#  0 = instant (mark as read immediately)
+# >0 = delay in seconds before marking as read
+auto_mark_read = -1
+
 [appearance]
 # Author display format: "fullname" or "username"
 # Toggle with 'u' key in chat view

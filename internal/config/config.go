@@ -28,8 +28,9 @@ type Config struct {
 
 // GeneralConfig contains general settings
 type GeneralConfig struct {
-	SendKey     string `toml:"send_key"`
-	DownloadDir string `toml:"download_dir"`
+	SendKey          string `toml:"send_key"`
+	DownloadDir      string `toml:"download_dir"`
+	AutoMarkReadSecs int    `toml:"auto_mark_read"` // -1=disabled, 0=instant, >0=delay in seconds
 }
 
 // AppearanceConfig contains appearance settings
@@ -53,8 +54,9 @@ func Default() *Config {
 	return &Config{
 		ConfigDir: configDir,
 		General: GeneralConfig{
-			SendKey:     "ctrl-enter",
-			DownloadDir: filepath.Join(homeDir, "Downloads", "tlgram"),
+			SendKey:          "ctrl-enter",
+			DownloadDir:      filepath.Join(homeDir, "Downloads", "tlgram"),
+			AutoMarkReadSecs: -1, // Disabled by default
 		},
 		Appearance: AppearanceConfig{
 			AuthorDisplay:      "fullname",
@@ -188,6 +190,12 @@ send_key = "ctrl-enter"
 
 # Download directory for media files
 download_dir = "~/Downloads/tlgram"
+
+# Auto-mark messages as read when viewing chat
+# -1 = disabled (manual only with 'R' key)
+#  0 = instant (mark as read immediately)
+# >0 = delay in seconds before marking as read
+auto_mark_read = -1
 
 [appearance]
 # Author display format: "fullname" or "username"

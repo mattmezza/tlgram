@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -89,6 +90,10 @@ type Model struct {
 	// New messages indicator (when scrolled up)
 	newMsgCount   int   // count of new messages
 	firstNewMsgID int64 // ID of first "new" message (to track which are new)
+
+	// Auto-mark-as-read state
+	autoMarkPending     bool  // Timer is pending for auto-mark
+	autoMarkPendingChat int64 // Chat ID for pending auto-mark
 
 	// Error state
 	lastError string
@@ -205,6 +210,10 @@ type markUnreadCompleteMsg struct {
 type markFullyReadCompleteMsg struct {
 	chatID int64
 	err    error
+}
+
+type autoMarkReadTickMsg struct {
+	chatID int64 // Which chat this tick is for (to ignore stale ticks)
 }
 
 type clientStartedMsg struct {
@@ -352,6 +361,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatsLoadedMsg:
 		m.chats = msg.chats
+		// Sort chats by most recent activity
+		sort.Slice(m.chats, func(i, j int) bool {
+			return m.chats[i].LastTime.After(m.chats[j].LastTime)
+		})
 
 		// If targetChat is specified, try to find and open it
 		if m.targetChat != "" {
@@ -447,7 +460,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.newMsgCount = 0
 		m.firstNewMsgID = 0
-		return m, nil
+
+		// Start auto-mark-as-read timer if configured
+		cmd := m.startAutoMarkReadTimer()
+		return m, cmd
 
 	case moreMessagesLoadedMsg:
 		m.loadingMore = false
@@ -617,6 +633,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, cmd
+
+	case autoMarkReadTickMsg:
+		// Ignore stale tick messages (from a different chat or already cancelled)
+		if !m.autoMarkPending || msg.chatID != m.autoMarkPendingChat {
+			return m, nil
+		}
+		m.autoMarkPending = false
+
+		// Mark all messages in the current chat as read
+		if m.currentChat != nil && m.currentChat.ID == msg.chatID {
+			return m, m.markChatFullyRead(msg.chatID)
+		}
+		return m, nil
 	}
 
 	return m, tea.Batch(cmds...)
@@ -632,10 +661,33 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 		return m, nil
 
 	case telegram.NewMessageUpdate:
-		// Convert and add new message if it's for the current chat
-		if m.currentChat != nil && u.Message.ChatID == m.currentChat.ID {
-			msg := convertTelegramMessage(u.Message)
+		msg := convertTelegramMessage(u.Message)
+		isCurrentChat := m.currentChat != nil && u.Message.ChatID == m.currentChat.ID
 
+		// Update chat list with new message info
+		for i, c := range m.chats {
+			if c.ID == u.Message.ChatID {
+				// Truncate message for preview
+				preview := msg.Text
+				if len(preview) > 50 {
+					preview = preview[:47] + "..."
+				}
+				m.chats[i].LastMessage = preview
+				m.chats[i].LastTime = msg.Time
+
+				// Increment unread count if not the current open chat and not own message
+				if !isCurrentChat && !msg.IsOwn {
+					m.chats[i].UnreadCount++
+				}
+				break
+			}
+		}
+
+		// Re-sort chats by most recent activity
+		m.sortChatsByRecent()
+
+		// Add to message list if it's for the current chat
+		if isCurrentChat {
 			// Check for duplicate message ID
 			isDuplicate := false
 			for _, existing := range m.messages {
@@ -664,6 +716,12 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 						m.firstNewMsgID = msg.ID // Track where "new" messages start
 					}
 					m.newMsgCount++
+				}
+
+				// (Re)start auto-mark timer for incoming messages
+				if !msg.IsOwn {
+					cmd := m.startAutoMarkReadTimer()
+					return m, cmd
 				}
 			}
 		}
@@ -859,6 +917,43 @@ func (m Model) markChatFullyRead(chatID int64) tea.Cmd {
 		err := m.telegramClient.MarkAsRead(chatID, int64(^uint32(0)>>1))
 		return markFullyReadCompleteMsg{chatID: chatID, err: err}
 	}
+}
+
+// sortChatsByRecent sorts chats by most recent activity (LastTime descending)
+func (m *Model) sortChatsByRecent() {
+	sort.Slice(m.chats, func(i, j int) bool {
+		return m.chats[i].LastTime.After(m.chats[j].LastTime)
+	})
+}
+
+// startAutoMarkReadTimer starts a timer to auto-mark messages as read
+// Returns nil if auto-mark is disabled or there are no unread messages
+func (m *Model) startAutoMarkReadTimer() tea.Cmd {
+	delay := m.config.General.AutoMarkReadSecs
+	if delay < 0 || m.currentChat == nil {
+		return nil // Disabled or no chat
+	}
+
+	// Check if there are any unread messages
+	if m.currentChat.UnreadCount == 0 && !m.currentChat.MarkedUnread {
+		return nil // No unread messages
+	}
+
+	chatID := m.currentChat.ID
+	m.autoMarkPending = true
+	m.autoMarkPendingChat = chatID
+
+	// Instant mode (0 delay)
+	if delay == 0 {
+		return func() tea.Msg {
+			return autoMarkReadTickMsg{chatID: chatID}
+		}
+	}
+
+	// Delayed mode
+	return tea.Tick(time.Duration(delay)*time.Second, func(t time.Time) tea.Msg {
+		return autoMarkReadTickMsg{chatID: chatID}
+	})
 }
 
 func convertTelegramChat(c *telegram.Chat) *Chat {
