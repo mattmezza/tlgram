@@ -1388,12 +1388,15 @@ func (m *Model) adjustTextareaHeight() {
 
 	// Get current height to calculate change
 	oldHeight := m.input.Height()
+	heightDiff := newHeight - oldHeight
+
+	// Set the new height first so viewport calculations use correct size
+	m.input.SetHeight(newHeight)
 
 	// If textarea is growing, scroll viewport down to keep same message in view
-	if newHeight > oldHeight {
-		heightDiff := newHeight - oldHeight
+	if heightDiff > 0 {
 		m.viewportStart += heightDiff
-		// Clamp viewportStart to valid range
+		// Clamp viewportStart to valid range (using NEW viewport height)
 		totalLines := m.getTotalLines()
 		viewportHeight := m.getViewportHeight()
 		maxViewportStart := totalLines - viewportHeight
@@ -1404,8 +1407,6 @@ func (m *Model) adjustTextareaHeight() {
 			m.viewportStart = maxViewportStart
 		}
 	}
-
-	m.input.SetHeight(newHeight)
 }
 
 func (m Model) sendMessage() (Model, tea.Cmd) {
