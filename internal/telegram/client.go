@@ -792,11 +792,13 @@ func (c *Client) EditMessage(chatID int64, messageID int64, newText string) erro
 		return fmt.Errorf("unknown chat: %d", chatID)
 	}
 
-	_, err := c.api.MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{
-		Peer:    peer,
-		ID:      int(messageID),
-		Message: newText,
-	})
+	req := &tg.MessagesEditMessageRequest{
+		Peer: peer,
+		ID:   int(messageID),
+	}
+	req.SetMessage(newText)
+
+	_, err := c.api.MessagesEditMessage(ctx, req)
 	return err
 }
 
