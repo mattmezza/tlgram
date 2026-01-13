@@ -30,6 +30,7 @@ func main() {
 	versionFlag := pflag.BoolP("version", "v", false, "Print version and exit")
 	helpFlag := pflag.BoolP("help", "h", false, "Print help and exit")
 	changelogFlag := pflag.Bool("changelog", false, "Print changelog and exit")
+	defaultConfigFlag := pflag.Bool("default-config", false, "Print default config to stdout")
 
 	pflag.Parse()
 
@@ -45,6 +46,11 @@ func main() {
 
 	if *changelogFlag {
 		printChangelog()
+		os.Exit(0)
+	}
+
+	if *defaultConfigFlag {
+		fmt.Print(tlgram.DefaultConfig)
 		os.Exit(0)
 	}
 
@@ -102,6 +108,7 @@ OPTIONS:
                          - Alias (e.g., --chat work)
     -v, --version        Print version and exit
         --changelog      Print changelog and exit
+        --default-config Print default config to stdout
     -h, --help           Print this help message
 
 EXAMPLES:

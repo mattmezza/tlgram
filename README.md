@@ -135,6 +135,7 @@ tlgram --chat work         # Open chat aliased as "work"
 tlgram --help              # Show help
 tlgram --version           # Show version
 tlgram --changelog         # Show changelog
+tlgram --default-config    # Print default config (useful for resetting)
 ```
 
 ### Keybindings
@@ -224,6 +225,8 @@ The bottom of the message view shows a scroll indicator:
 
 Configuration file: `~/.config/tlgram/config.toml`
 
+To reset your config or see all options: `tlgram --default-config > ~/.config/tlgram/config.toml`
+
 ```toml
 [telegram]
 api_id = 12345678
@@ -237,18 +240,18 @@ auto_mark_read = true
 initial_message_count = 50
 
 [appearance]
+always_show_timestamps = false
+timestamp_format = "15:04:05"
+theme = "default"
 # Author display: "fullname" or "username" (toggle with 'u' key)
 author_display = "fullname"
+reply_preview_length = 30
+# Show chat ID in header (toggle with 'I' key)
+show_chat_id = false
 
 [chat_aliases]
 work = "@john_doe"
 team = "-1001234567890"
-
-[keybindings]
-chat_switcher = "ctrl+p"
-reply = "r"
-copy = "yy"
-download = "d"
 
 [network]
 auto_reconnect = true
@@ -257,6 +260,8 @@ reconnect_delay = 2
 [logging]
 level = "info"
 log_file = "~/.config/tlgram/logs/app.log"
+max_size = 10
+max_backups = 3
 ```
 
 ## tmux Integration

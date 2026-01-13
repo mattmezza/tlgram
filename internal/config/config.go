@@ -23,7 +23,6 @@ type Config struct {
 	General     GeneralConfig     `toml:"general"`
 	Appearance  AppearanceConfig  `toml:"appearance"`
 	ChatAliases map[string]string `toml:"chat_aliases"`
-	Keybindings KeybindingsConfig `toml:"keybindings"`
 	Network     NetworkConfig     `toml:"network"`
 	Logging     LoggingConfig     `toml:"logging"`
 	Telegram    TelegramConfig    `toml:"telegram"`
@@ -45,15 +44,6 @@ type AppearanceConfig struct {
 	AuthorDisplay        string `toml:"author_display"`       // "fullname" or "username"
 	ReplyPreviewLength   int    `toml:"reply_preview_length"` // max chars for reply preview
 	ShowChatID           bool   `toml:"show_chat_id"`         // show chat ID in header
-}
-
-// KeybindingsConfig contains keybinding settings
-type KeybindingsConfig struct {
-	ChatSwitcher string `toml:"chat_switcher"`
-	Reply        string `toml:"reply"`
-	Copy         string `toml:"copy"`
-	Download     string `toml:"download"`
-	InsertMode   string `toml:"insert_mode"`
 }
 
 // NetworkConfig contains network settings
@@ -98,13 +88,6 @@ func Default() *Config {
 			ShowChatID:           false,
 		},
 		ChatAliases: make(map[string]string),
-		Keybindings: KeybindingsConfig{
-			ChatSwitcher: "ctrl+p",
-			Reply:        "r",
-			Copy:         "y",
-			Download:     "d",
-			InsertMode:   "i",
-		},
 		Network: NetworkConfig{
 			AutoReconnect:  true,
 			ReconnectDelay: 2,
@@ -282,13 +265,6 @@ show_chat_id = false
 # work = "@john_doe"
 # project = "-1001234567890"
 # team = "@project_team_group"
-
-[keybindings]
-chat_switcher = "ctrl+p"
-reply = "r"
-copy = "y"
-download = "d"
-insert_mode = "i"
 
 [network]
 auto_reconnect = true
