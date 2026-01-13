@@ -85,8 +85,8 @@ type Model struct {
 	loadingMore bool
 
 	// New messages indicator (when scrolled up)
-	newMsgCount    int   // count of new messages
-	firstNewMsgID  int64 // ID of first "new" message (to track which are new)
+	newMsgCount   int   // count of new messages
+	firstNewMsgID int64 // ID of first "new" message (to track which are new)
 
 	// Error state
 	lastError string
