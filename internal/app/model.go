@@ -2050,10 +2050,6 @@ func (m Model) renderMessages(maxHeight int) string {
 		scrollInfo = scrollInfo + " " + newMsgStyle.Render(fmt.Sprintf("(%d new)", m.newMsgCount))
 	}
 
-	// Add hint for chat ID toggle
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	scrollInfo = scrollInfo + hintStyle.Render(" ─ I: show ID")
-
 	visibleLines = append(visibleLines, lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(scrollInfo))
 
 	return strings.Join(visibleLines, "\n")
@@ -2567,7 +2563,7 @@ func wrapText(text string, width int) []string {
 func (m Model) viewInput() string {
 	placeholder := "Type a message..."
 	if m.vim.Mode() == keybind.ModeNormal {
-		placeholder = "i: type, r: reply, yy: copy, u: toggle names, Ctrl-p: switcher"
+		placeholder = "i: type, r: reply, yy: copy, u: toggle names, Ctrl-p: switcher, I: show ID, R: read, U: unread, gg: go top, G: go end, H: go first, L: go last"
 	}
 	m.input.Placeholder = placeholder
 
