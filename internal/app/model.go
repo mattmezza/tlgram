@@ -199,6 +199,11 @@ type markUnreadCompleteMsg struct {
 	err    error
 }
 
+type markFullyReadCompleteMsg struct {
+	chatID int64
+	err    error
+}
+
 type clientStartedMsg struct {
 	client *telegram.Client
 }
@@ -521,9 +526,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if c.ID == msg.chatID {
 					m.chats[i].LastReadInboxID = msg.maxMsgID
 					m.chats[i].UnreadCount = remainingUnread
+					m.chats[i].MarkedUnread = false // Clear "marked unread" flag when reading
 					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
 						m.currentChat.LastReadInboxID = msg.maxMsgID
 						m.currentChat.UnreadCount = remainingUnread
+						m.currentChat.MarkedUnread = false
 					}
 					break
 				}
@@ -556,6 +563,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.chats[i].MarkedUnread = true
 					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
 						m.currentChat.MarkedUnread = true
+					}
+					break
+				}
+			}
+		}
+		return m, cmd
+
+	case markFullyReadCompleteMsg:
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Error: "+msg.err.Error(), 3*time.Second)
+		} else {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Marked as read", 2*time.Second)
+			// Update local state - clear unread count and marked unread flag
+			for i, c := range m.chats {
+				if c.ID == msg.chatID {
+					m.chats[i].UnreadCount = 0
+					m.chats[i].MarkedUnread = false
+					if m.currentChat != nil && m.currentChat.ID == msg.chatID {
+						m.currentChat.UnreadCount = 0
+						m.currentChat.MarkedUnread = false
 					}
 					break
 				}
@@ -773,6 +801,8 @@ func (m Model) markMessagesAsRead(chatID int64, maxMsgID int64) tea.Cmd {
 	}
 
 	return func() tea.Msg {
+		// Clear the "marked unread" flag when marking as read
+		_ = m.telegramClient.MarkDialogUnread(chatID, false)
 		err := m.telegramClient.MarkAsRead(chatID, maxMsgID)
 		return markReadCompleteMsg{chatID: chatID, maxMsgID: maxMsgID, err: err}
 	}
@@ -786,6 +816,20 @@ func (m Model) markDialogUnread(chatID int64) tea.Cmd {
 	return func() tea.Msg {
 		err := m.telegramClient.MarkDialogUnread(chatID, true)
 		return markUnreadCompleteMsg{chatID: chatID, err: err}
+	}
+}
+
+func (m Model) markChatFullyRead(chatID int64) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		// Clear the "marked unread" flag first
+		_ = m.telegramClient.MarkDialogUnread(chatID, false)
+		// Mark all messages as read using max int32 as message ID
+		err := m.telegramClient.MarkAsRead(chatID, int64(^uint32(0)>>1))
+		return markFullyReadCompleteMsg{chatID: chatID, err: err}
 	}
 }
 
@@ -1389,11 +1433,22 @@ func (m Model) handleSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switcherIdx = 0
 		return m, nil
 
-	case "U":
+	case "ctrl+u":
 		// Mark selected chat as unread from switcher
 		filtered := m.getFilteredChats()
 		if len(filtered) > 0 && m.switcherIdx < len(filtered) {
 			return m, m.markDialogUnread(filtered[m.switcherIdx].ID)
+		}
+		return m, nil
+
+	case "ctrl+r":
+		// Mark selected chat as read from switcher
+		filtered := m.getFilteredChats()
+		if len(filtered) > 0 && m.switcherIdx < len(filtered) {
+			chat := filtered[m.switcherIdx]
+			// Find the latest message ID for this chat to mark all as read
+			// We use 0 as a signal to mark all messages (will be handled in client)
+			return m, m.markChatFullyRead(chat.ID)
 		}
 		return m, nil
 
@@ -1711,7 +1766,7 @@ func (m Model) viewSwitcher() string {
 	}
 
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Type to search • Ctrl-n/p: navigate • Enter: select • Esc: close"))
+	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Type to search • Ctrl-n/p: navigate • Ctrl-r/u: read/unread • Enter: select • Esc: close"))
 
 	box := boxStyle.Render(content.String())
 

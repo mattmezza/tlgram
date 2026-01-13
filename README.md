@@ -184,7 +184,8 @@ tlgram --changelog         # Show changelog
 | `Ctrl-n` | Navigate down |
 | `Ctrl-p` | Navigate up |
 | `Enter` | Select chat |
-| `U` | Mark selected chat as unread |
+| `Ctrl-r` | Mark selected chat as read |
+| `Ctrl-u` | Mark selected chat as unread |
 | `Escape` | Close switcher |
 | Type | Filter chats by name or @username |
 
