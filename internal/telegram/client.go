@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,9 +10,9 @@ import (
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 // ClientConfig holds configuration for the Telegram client
@@ -485,7 +484,7 @@ func (c *Client) SendAuthCode(code string) error {
 		})
 		if err != nil {
 			// Check if 2FA is required
-			if errors.Is(err, auth.ErrPasswordAuthNeeded) {
+			if tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
 				c.setAuthState(AuthStateWaitPassword)
 				return
 			}
