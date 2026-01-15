@@ -60,18 +60,18 @@ const (
 	ActionCancel
 	ActionQuit
 	ActionToggleUsername
-	ActionMarkRead       // R - mark messages as read up to cursor
-	ActionMarkUnread     // U - mark dialog as unread
-	ActionJumpToOriginal // o - jump to original message (for replies)
-	ActionJumpBack       // ctrl+o - jump back after jumping to original
-	ActionShowChatID     // I - toggle chat ID display in header
-	ActionAppend         // A - scroll to bottom and enter insert mode
-	ActionEditMessage    // cc - edit message at cursor
-	ActionDeleteMessage  // D - delete message at cursor
-	ActionShowHelp           // ? - show help screen
-	ActionToggleMute         // m - toggle mute for current chat
-	ActionToggleGlobalMute   // M - toggle global mute for all notifications
-	ActionToggleWatch        // w - toggle watch for current chat (always notify)
+	ActionMarkRead         // R - mark messages as read up to cursor
+	ActionMarkUnread       // U - mark dialog as unread
+	ActionJumpToOriginal   // o - jump to original message (for replies)
+	ActionJumpBack         // ctrl+o - jump back after jumping to original
+	ActionShowChatID       // I - toggle chat ID display in header
+	ActionAppend           // A - scroll to bottom and enter insert mode
+	ActionEditMessage      // cc - edit message at cursor
+	ActionDeleteMessage    // D - delete message at cursor
+	ActionShowHelp         // ? - show help screen
+	ActionToggleMute       // m - toggle mute for current chat
+	ActionToggleGlobalMute // M - toggle global mute for all notifications
+	ActionToggleWatch      // w - toggle watch for current chat (always notify)
 )
 
 // Result holds the action and any associated count
