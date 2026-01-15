@@ -20,10 +20,11 @@ const (
 type Config struct {
 	ConfigDir string `toml:"-"` // Not in TOML, set programmatically
 
-	General     GeneralConfig     `toml:"general"`
-	Appearance  AppearanceConfig  `toml:"appearance"`
-	ChatAliases map[string]string `toml:"chat_aliases"`
-	Telegram    TelegramConfig    `toml:"telegram"`
+	General      GeneralConfig      `toml:"general"`
+	Appearance   AppearanceConfig   `toml:"appearance"`
+	Notification NotificationConfig `toml:"notification"`
+	ChatAliases  map[string]string  `toml:"chat_aliases"`
+	Telegram     TelegramConfig     `toml:"telegram"`
 }
 
 // GeneralConfig contains general settings
@@ -46,6 +47,12 @@ type TelegramConfig struct {
 	APIHash string `toml:"api_hash"`
 }
 
+// NotificationConfig contains notification settings
+type NotificationConfig struct {
+	Command    string `toml:"command"`     // Notification command with %s and %m placeholders
+	StartMuted bool   `toml:"start_muted"` // Start with global mute enabled
+}
+
 // Default returns the default configuration
 func Default() *Config {
 	homeDir, _ := os.UserHomeDir()
@@ -62,6 +69,10 @@ func Default() *Config {
 			AuthorDisplay:      "fullname",
 			ReplyPreviewLength: 30,
 			ShowChatID:         false,
+		},
+		Notification: NotificationConfig{
+			Command:    "", // Disabled by default
+			StartMuted: false,
 		},
 		ChatAliases: make(map[string]string),
 		Telegram: TelegramConfig{
@@ -208,6 +219,20 @@ reply_preview_length = 30
 # Show chat ID in header bar (useful for creating aliases)
 # Toggle with 'I' key in chat view
 show_chat_id = false
+
+[notification]
+# Command to run for notifications. Leave empty to disable.
+# Template variables:
+#   %s = sender name
+#   %m = message preview (truncated)
+# Examples:
+#   notify-send 'tlgram' '%s: %m'
+#   terminal-notifier -title 'tlgram' -message '%s: %m'
+#   echo -e '\a' && notify-send 'tlgram' '%s: %m'  # with terminal bell
+command = ""
+
+# Start with all notifications muted (toggle with 'M' key)
+start_muted = false
 
 [chat_aliases]
 # Define shortcuts for your frequent chats

@@ -8,7 +8,7 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 
 ## Features
 
-- **Vim keybindings** - Navigate with hjkl, gg/G, Ctrl-d/u, H/L
+- **Vim keybindings** - Navigate with hjkl, gg/G, Ctrl-d/u, H/L (press `?` for help)
 - **Line-based cursor** - Move through messages line by line, handles wrapped text naturally
 - **Multi-line messages** - Compose multi-line messages (Enter for newline, Alt-Enter to send)
 - **CLI chat opening** - `tlgram --chat @username` or `tlgram --chat work`
@@ -17,6 +17,8 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 - **Chat aliases** - Define shortcuts like `work = "@john_doe"`
 - **Smart header bar** - Shows chat type info (DM: name @username, Group: name (x members))
 - **Unread indicator** - Visual badge for unread messages
+- **Notifications** - Custom notification commands (can include terminal bell for tmux visual bell)
+- **Watch/Mute** - Watch (`w`) for priority chats, mute individual (`m`) or all (`M`)
 - **Pure Go** - No CGO dependencies, uses gotd/td library
 
 ## Installation
@@ -183,6 +185,10 @@ tlgram --default-config    # Print default config (useful for resetting)
 | `U` | Mark dialog as unread |
 | `I` | Toggle chat ID display in header |
 | `d` | Download media |
+| `w` | Watch chat (always notify, bypasses mutes) |
+| `m` | Mute notifications for this chat |
+| `M` | Mute ALL notifications (global toggle) |
+| `?` | Show help screen with all keybindings |
 | `q` | Quit |
 
 #### Chat Switcher
@@ -253,6 +259,14 @@ reply_preview_length = 30
 # Show chat ID in header (toggle with 'I' key)
 show_chat_id = false
 
+[notification]
+# External notification command (leave empty to disable)
+# Template variables: %s = sender name, %m = message preview
+# Add echo -e '\a' for tmux visual bell
+command = "echo -e '\\a' && notify-send 'tlgram' '%s: %m'"
+# Start with all notifications muted (toggle with 'M' key)
+start_muted = false
+
 [chat_aliases]
 work = "@john_doe"
 team = "-1001234567890"
@@ -269,6 +283,33 @@ tmux new-window -n telegram "tlgram --chat work"
 # Split and open another chat
 tmux split-window -h "tlgram --chat team"
 ```
+
+### Visual Bell for Notifications
+
+Add `echo -e '\a'` to your notification command for tmux window highlighting:
+
+```toml
+[notification]
+command = "echo -e '\\a' && notify-send 'tlgram' '%s: %m'"
+```
+
+Then in your `~/.tmux.conf`:
+
+```bash
+# Enable visual bell (highlights window name on bell)
+set -g visual-bell on
+set -g bell-action other  # Only trigger for non-current windows
+```
+
+This will highlight the tmux window name when messages arrive in non-focused chats.
+
+### Watch vs Mute
+
+All notification toggles are runtime-only (not persisted across restarts):
+
+- `w` - Watch a chat: always notify, even if global mute is on
+- `m` - Mute a chat: suppress notifications for this chat
+- `M` - Global mute: suppress all notifications (except watched chats)
 
 ### With hop
 

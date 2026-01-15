@@ -55,6 +55,23 @@ var (
 			Foreground(lipgloss.Color("255")).
 			Bold(true).
 			Padding(0, 1)
+
+	mutedIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241")).
+				Italic(true)
+
+	watchedIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Italic(true)
+)
+
+// NotifyState represents the notification state of a chat
+type NotifyState int
+
+const (
+	NotifyStateNone    NotifyState = iota // Default - notifications enabled
+	NotifyStateMuted                      // Chat is muted
+	NotifyStateWatched                    // Chat is watched (always notify)
 )
 
 // Model represents the status bar
@@ -70,6 +87,7 @@ type Model struct {
 	memberCount  int
 	unreadCount  int
 	showChatID   bool
+	notifyState  NotifyState
 	connState    telegram.ConnectionState
 	notification string
 	notifyUntil  time.Time
@@ -122,6 +140,11 @@ func (m *Model) SetChatID(id int64) {
 // SetShowChatID sets whether to display the chat ID
 func (m *Model) SetShowChatID(show bool) {
 	m.showChatID = show
+}
+
+// SetNotifyState sets the notification state indicator
+func (m *Model) SetNotifyState(state NotifyState) {
+	m.notifyState = state
 }
 
 // SetConnectionState sets the connection state
@@ -198,6 +221,14 @@ func (m Model) View() string {
 	// Add chat ID if enabled
 	if m.showChatID && m.chatID != 0 {
 		chatView += " " + chatInfoStyle.Render(fmt.Sprintf("ID: %d", m.chatID))
+	}
+
+	// Add notify state indicator
+	switch m.notifyState {
+	case NotifyStateMuted:
+		chatView += " " + mutedIndicatorStyle.Render("(muted)")
+	case NotifyStateWatched:
+		chatView += " " + watchedIndicatorStyle.Render("(watched)")
 	}
 
 	// Build right side: unread indicator, notification, or connection state

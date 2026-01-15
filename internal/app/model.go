@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,7 @@ const (
 	ViewChatList
 	ViewChat
 	ViewSwitcher
+	ViewHelp
 )
 
 // Model is the main application model
@@ -86,6 +88,11 @@ type Model struct {
 	// Display preferences
 	showUsernames bool // Toggle between full name and @username
 	showChatID    bool // Toggle chat ID display in header
+
+	// Notification state (all runtime-only, not persisted)
+	globalMute   bool           // Mute all notifications (toggle with 'M')
+	mutedChats   map[int64]bool // Muted chats (toggle with 'm')
+	watchedChats map[int64]bool // Watched chats - always notify (toggle with 'w')
 
 	// Loading state
 	loadingMore bool
@@ -162,6 +169,9 @@ func New(cfg *config.Config, targetChat string) Model {
 		messages:      make([]*Message, 0),
 		showUsernames: cfg.Appearance.AuthorDisplay == "username",
 		showChatID:    cfg.Appearance.ShowChatID,
+		globalMute:    cfg.Notification.StartMuted,
+		mutedChats:    make(map[int64]bool),
+		watchedChats:  make(map[int64]bool),
 	}
 
 	// Show setup screen if no credentials, otherwise auth screen
@@ -747,6 +757,17 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 		// Re-sort chats by most recent activity
 		m.sortChatsByRecent()
 
+		// Send notification if:
+		// - Watched chats: always notify (even if currently viewing)
+		// - Other chats: notify if not current chat, not globally muted, not per-chat muted
+		// - Never notify for own messages
+		isWatched := m.watchedChats[u.Message.ChatID]
+		isMuted := m.mutedChats[u.Message.ChatID]
+		shouldNotify := !msg.IsOwn && (isWatched || (!isCurrentChat && !m.globalMute && !isMuted))
+		if shouldNotify {
+			m.sendNotification(msg.Sender, msg.Text)
+		}
+
 		// Add to message list if it's for the current chat
 		if isCurrentChat {
 			// Check for duplicate message ID
@@ -987,6 +1008,36 @@ func (m *Model) sortChatsByRecent() {
 	})
 }
 
+// sendNotification executes the notification command with sender and message
+func (m Model) sendNotification(senderName, messagePreview string) {
+	cmd := m.config.Notification.Command
+	if cmd == "" {
+		return // Notifications disabled
+	}
+
+	// Truncate message preview
+	if len(messagePreview) > 50 {
+		messagePreview = messagePreview[:47] + "..."
+	}
+
+	// Escape single quotes in sender and message to prevent shell injection
+	senderName = strings.ReplaceAll(senderName, "'", "'\\''")
+	messagePreview = strings.ReplaceAll(messagePreview, "'", "'\\''")
+
+	// Replace template variables
+	cmd = strings.ReplaceAll(cmd, "%s", senderName)
+	cmd = strings.ReplaceAll(cmd, "%m", messagePreview)
+
+	// Execute command asynchronously, wiring stdout/stderr to current process
+	// This allows commands like "echo -e '\a'" to trigger the terminal bell
+	go func() {
+		c := exec.Command("sh", "-c", cmd)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		_ = c.Run()
+	}()
+}
+
 func (m Model) editMessage(chatID int64, messageID int64, newText string) tea.Cmd {
 	if m.telegramClient == nil {
 		return nil
@@ -1088,6 +1139,7 @@ func (m *Model) updateStatusBarForChat() {
 		m.statusBar.SetChatName("tlgram")
 		m.statusBar.SetChatID(0)
 		m.statusBar.SetShowChatID(false)
+		m.statusBar.SetNotifyState(statusbar.NotifyStateNone)
 		return
 	}
 	m.statusBar.SetChatInfo(
@@ -1099,6 +1151,18 @@ func (m *Model) updateStatusBarForChat() {
 	)
 	m.statusBar.SetChatID(m.currentChat.ID)
 	m.statusBar.SetShowChatID(m.showChatID)
+	m.statusBar.SetNotifyState(m.getNotifyState(m.currentChat.ID))
+}
+
+// getNotifyState returns the notification state for a chat
+func (m *Model) getNotifyState(chatID int64) statusbar.NotifyState {
+	if m.watchedChats[chatID] {
+		return statusbar.NotifyStateWatched
+	}
+	if m.mutedChats[chatID] {
+		return statusbar.NotifyStateMuted
+	}
+	return statusbar.NotifyStateNone
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1125,6 +1189,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleChatKey(msg)
 	case ViewSwitcher:
 		return m.handleSwitcherKey(msg)
+	case ViewHelp:
+		return m.handleHelpKey(msg)
 	}
 
 	return m, nil
@@ -1265,6 +1331,11 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.switcherInput.Reset()
 		m.switcherInput.Focus()
 		m.switcherIdx = 0
+
+	case keybind.ActionShowHelp:
+		m.prevView = m.currentView
+		m.currentView = ViewHelp
+		return m, nil
 	}
 
 	return m, nil
@@ -1610,6 +1681,57 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.replyingTo = nil
 		m.editingMessage = nil
 		m.statusBar.SetMode(keybind.ModeNormal)
+
+	case keybind.ActionShowHelp:
+		m.prevView = m.currentView
+		m.currentView = ViewHelp
+		return m, nil
+
+	case keybind.ActionToggleMute:
+		if m.currentChat != nil {
+			chatID := m.currentChat.ID
+			var msg string
+			if m.mutedChats[chatID] {
+				delete(m.mutedChats, chatID)
+				msg = "Chat unmuted"
+			} else {
+				m.mutedChats[chatID] = true
+				msg = "Chat muted"
+			}
+			m.statusBar.SetNotifyState(m.getNotifyState(chatID))
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification(msg, 2*time.Second)
+			return m, cmd
+		}
+
+	case keybind.ActionToggleGlobalMute:
+		m.globalMute = !m.globalMute
+		var msg string
+		if m.globalMute {
+			msg = "All notifications muted"
+		} else {
+			msg = "Notifications enabled"
+		}
+		var cmd tea.Cmd
+		m.statusBar, cmd = m.statusBar.ShowNotification(msg, 2*time.Second)
+		return m, cmd
+
+	case keybind.ActionToggleWatch:
+		if m.currentChat != nil {
+			chatID := m.currentChat.ID
+			var msg string
+			if m.watchedChats[chatID] {
+				delete(m.watchedChats, chatID)
+				msg = "Stopped watching"
+			} else {
+				m.watchedChats[chatID] = true
+				msg = "Watching chat"
+			}
+			m.statusBar.SetNotifyState(m.getNotifyState(chatID))
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification(msg, 2*time.Second)
+			return m, cmd
+		}
 	}
 
 	m.statusBar.SetMode(m.vim.Mode())
@@ -1868,6 +1990,8 @@ func (m Model) View() string {
 		return m.viewChat()
 	case ViewSwitcher:
 		return m.viewSwitcher()
+	case ViewHelp:
+		return m.viewHelp()
 	}
 
 	return "Unknown view"
@@ -2105,6 +2229,138 @@ func (m Model) viewSwitcher() string {
 
 	// Center the box in the screen
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) viewHelp() string {
+	// Box width is about 70% of screen width, min 50, max 90
+	boxWidth := m.width * 70 / 100
+	if boxWidth < 50 {
+		boxWidth = 50
+	}
+	if boxWidth > 90 {
+		boxWidth = 90
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 2).
+		Width(boxWidth)
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("39"))
+
+	categoryStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("214"))
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("35"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	var content strings.Builder
+	content.WriteString(titleStyle.Render("Keybindings"))
+	content.WriteString("\n\n")
+
+	// Navigation
+	content.WriteString(categoryStyle.Render("NAVIGATION"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  j/k") + descStyle.Render("          Move down/up"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  gg/G") + descStyle.Render("         Jump to top/bottom"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  H/L") + descStyle.Render("          Viewport top/bottom"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  Ctrl+d/u") + descStyle.Render("     Half page down/up"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  Ctrl+f/b") + descStyle.Render("     Full page down/up"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  o") + descStyle.Render("            Jump to original message"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  Ctrl+o") + descStyle.Render("       Jump back"))
+	content.WriteString("\n\n")
+
+	// Mode changes
+	content.WriteString(categoryStyle.Render("MODE"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  i") + descStyle.Render("            Enter insert mode"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  A") + descStyle.Render("            Scroll to bottom + insert"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  Esc") + descStyle.Render("          Exit to normal mode"))
+	content.WriteString("\n\n")
+
+	// Actions
+	content.WriteString(categoryStyle.Render("ACTIONS"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  r") + descStyle.Render("            Reply to message"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  yy") + descStyle.Render("           Copy message"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  cc") + descStyle.Render("           Edit own message"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  D") + descStyle.Render("            Delete own message"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  d") + descStyle.Render("            Download media"))
+	content.WriteString("\n\n")
+
+	// Reading
+	content.WriteString(categoryStyle.Render("READING"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  R") + descStyle.Render("            Mark messages as read"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  U") + descStyle.Render("            Mark dialog as unread"))
+	content.WriteString("\n\n")
+
+	// Display
+	content.WriteString(categoryStyle.Render("DISPLAY"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  u") + descStyle.Render("            Toggle username display"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  I") + descStyle.Render("            Toggle chat ID in header"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  w") + descStyle.Render("            Watch chat (always notify)"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  m") + descStyle.Render("            Mute this chat"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  M") + descStyle.Render("            Mute ALL notifications"))
+	content.WriteString("\n\n")
+
+	// Switcher
+	content.WriteString(categoryStyle.Render("SWITCHER"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  Ctrl+p") + descStyle.Render("       Open chat switcher"))
+	content.WriteString("\n\n")
+
+	// General
+	content.WriteString(categoryStyle.Render("GENERAL"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  q") + descStyle.Render("            Quit"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  ?") + descStyle.Render("            Show this help"))
+	content.WriteString("\n\n")
+
+	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Press ? or Esc to close"))
+
+	box := boxStyle.Render(content.String())
+
+	// Center the box in the screen
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "?", "esc", "escape", "q":
+		m.currentView = m.prevView
+		return m, nil
+	}
+
+	return m, nil
 }
 
 // messageLine represents a line and which message it belongs to
@@ -2824,7 +3080,7 @@ func wrapText(text string, width int) []string {
 func (m Model) viewInput() string {
 	placeholder := "Type a message..."
 	if m.vim.Mode() == keybind.ModeNormal {
-		placeholder = "i: type, r: reply, yy: copy, u: toggle names, Ctrl-p: switcher, I: show ID, R: read, U: unread, gg: go top, G: go end, H: go first, L: go last"
+		placeholder = "Press ? for help"
 	}
 	m.input.Placeholder = placeholder
 

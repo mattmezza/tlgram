@@ -68,6 +68,10 @@ const (
 	ActionAppend         // A - scroll to bottom and enter insert mode
 	ActionEditMessage    // cc - edit message at cursor
 	ActionDeleteMessage  // D - delete message at cursor
+	ActionShowHelp           // ? - show help screen
+	ActionToggleMute         // m - toggle mute for current chat
+	ActionToggleGlobalMute   // M - toggle global mute for all notifications
+	ActionToggleWatch        // w - toggle watch for current chat (always notify)
 )
 
 // Result holds the action and any associated count
@@ -236,6 +240,18 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "q":
 		v.reset()
 		return Result{Action: ActionQuit}
+	case "?":
+		v.reset()
+		return Result{Action: ActionShowHelp}
+	case "m":
+		v.reset()
+		return Result{Action: ActionToggleMute}
+	case "M":
+		v.reset()
+		return Result{Action: ActionToggleGlobalMute}
+	case "w":
+		v.reset()
+		return Result{Action: ActionToggleWatch}
 	}
 
 	// Unknown sequence - reset if not a prefix
