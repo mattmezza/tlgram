@@ -670,7 +670,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case autoMarkReadTickMsg:
-		// Ignore stale tick messages (from a different chat or already cancelled)
+		// Ignore stale tick messages (from a different chat or already canceled)
 		if !m.autoMarkPending || msg.chatID != m.autoMarkPendingChat {
 			return m, nil
 		}

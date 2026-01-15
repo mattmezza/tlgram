@@ -2,9 +2,15 @@
 
 All notable changes to tlgram will be documented in this file.
 
-## [Unreleased]
+## [0.3] - 2026-01-15
 
 ### Added
+- Help screen overlay (`?` key) showing all keybindings
+- Notification system with custom command hook (`notification.command` config)
+- Watch chat toggle (`w` key) - always notify, even when viewing or with global mute
+- Mute chat toggle (`m` key) - suppress notifications for specific chats
+- Global mute toggle (`M` key) - suppress all notifications except watched chats
+- Status bar indicator showing muted/watched state
 - `A` key to jump to bottom and enter INSERT mode (vim-style append)
 - Real-time chat list updates (unread count, last message, reordering by activity)
 - Auto-mark messages as read with configurable delay (`auto_mark_read` config option)
@@ -12,6 +18,7 @@ All notable changes to tlgram will be documented in this file.
 - Delete own messages with `D` key
 
 ### Fixed
+- 2FA login now works correctly (fixed SESSION_PASSWORD_NEEDED detection)
 - Auto-scroll now works when at bottom of chat (viewport follows new messages)
 
 ## [0.2] - 2026-01-13
