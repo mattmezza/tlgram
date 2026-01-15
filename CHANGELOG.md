@@ -2,6 +2,10 @@
 
 All notable changes to tlgram will be documented in this file.
 
+## [0.4] - 2026-01-15
+
+Same as v0.3 with CI fixes.
+
 ## [0.3] - 2026-01-15
 
 ### Added
