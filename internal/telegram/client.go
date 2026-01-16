@@ -258,10 +258,15 @@ func (c *Client) handleUpdate(_ context.Context, update tg.UpdateClass, users []
 
 	case *tg.UpdateEditMessage:
 		if msg, ok := u.Message.(*tg.Message); ok {
+			var reactions []Reaction
+			if r, ok := msg.GetReactions(); ok {
+				reactions = c.convertReactions(&r)
+			}
 			c.sendUpdate(MessageEditedUpdate{
 				ChatID:    c.getPeerID(msg.PeerID),
 				MessageID: int64(msg.ID),
 				NewText:   msg.Message,
+				Reactions: reactions,
 			})
 		}
 
@@ -302,6 +307,14 @@ func (c *Client) handleUpdate(_ context.Context, update tg.UpdateClass, users []
 				MarkedUnread: u.Unread,
 			})
 		}
+
+	case *tg.UpdateMessageReactions:
+		chatID := c.getPeerID(u.Peer)
+		c.sendUpdate(MessageReactionsUpdate{
+			ChatID:    chatID,
+			MessageID: int64(u.MsgID),
+			Reactions: c.convertReactions(&u.Reactions),
+		})
 	}
 }
 
@@ -932,6 +945,69 @@ func (c *Client) MarkDialogUnread(chatID int64, unread bool) error {
 	return err
 }
 
+// ReactionResult contains information about the reaction operation
+type ReactionResult struct {
+	Added   bool   // True if reaction was added, false if removed
+	Emoji   string // The emoji that was added/removed
+	Toggled bool   // True if the operation was a toggle (tried to add but removed instead)
+}
+
+// SendReaction sends a reaction to a message. Pass empty emoji to remove reaction.
+// If adding a reaction fails with MESSAGE_NOT_MODIFIED (reaction already exists),
+// it will automatically try to remove the reaction instead (toggle behavior).
+// Returns ReactionResult indicating what action was taken.
+func (c *Client) SendReaction(chatID int64, messageID int, emoji string) (*ReactionResult, error) {
+	if c.api == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+	defer cancel()
+
+	peer := c.getInputPeer(chatID)
+	if peer == nil {
+		return nil, fmt.Errorf("unknown chat: %d", chatID)
+	}
+
+	// Build reaction slice: non-empty emoji adds reaction, empty string removes
+	var reactions []tg.ReactionClass
+	if emoji != "" {
+		reactions = []tg.ReactionClass{&tg.ReactionEmoji{Emoticon: emoji}}
+	} else {
+		reactions = []tg.ReactionClass{} // Explicit empty slice to remove reaction
+	}
+
+	_, err := c.api.MessagesSendReaction(ctx, &tg.MessagesSendReactionRequest{
+		Peer:        peer,
+		MsgID:       messageID,
+		Reaction:    reactions,
+		AddToRecent: true,
+	})
+
+	// Handle MESSAGE_NOT_MODIFIED errors
+	if err != nil {
+		if rpcErr, ok := tgerr.As(err); ok && rpcErr.Type == "MESSAGE_NOT_MODIFIED" {
+			if emoji != "" {
+				// Tried to add a reaction that already exists - remove it (toggle)
+				_, err = c.api.MessagesSendReaction(ctx, &tg.MessagesSendReactionRequest{
+					Peer:     peer,
+					MsgID:    messageID,
+					Reaction: []tg.ReactionClass{}, // Explicit empty slice to remove reaction
+				})
+				if err == nil {
+					return &ReactionResult{Added: false, Emoji: emoji, Toggled: true}, nil
+				}
+			} else {
+				// Tried to remove a reaction that doesn't exist - that's fine
+				return &ReactionResult{Added: false, Emoji: "", Toggled: false}, nil
+			}
+		}
+		return nil, err
+	}
+
+	return &ReactionResult{Added: emoji != "", Emoji: emoji, Toggled: false}, nil
+}
+
 // DownloadFile downloads a file (not implemented yet)
 func (c *Client) DownloadFile(fileID string, priority int) error {
 	return fmt.Errorf("file download not implemented")
@@ -1086,6 +1162,11 @@ func (c *Client) convertMessage(msg *tg.Message) *Message {
 		}
 	}
 
+	// Handle reactions
+	if reactions, ok := msg.GetReactions(); ok {
+		m.Reactions = c.convertReactions(&reactions)
+	}
+
 	return m
 }
 
@@ -1131,6 +1212,27 @@ func getDocumentFilename(doc *tg.Document) string {
 		}
 	}
 	return ""
+}
+
+func (c *Client) convertReactions(reactions *tg.MessageReactions) []Reaction {
+	if reactions == nil {
+		return nil
+	}
+	result := make([]Reaction, 0, len(reactions.Results))
+	for _, rc := range reactions.Results {
+		if emoji, ok := rc.Reaction.(*tg.ReactionEmoji); ok {
+			// GetChosenOrder returns (order, isSet) - if isSet is true, the current user
+			// reacted with this emoji. The order value (0-indexed) indicates the position
+			// in the user's reaction list, but we only care if it's set.
+			_, isChosen := rc.GetChosenOrder()
+			result = append(result, Reaction{
+				Emoji:  emoji.Emoticon,
+				Count:  rc.Count,
+				Chosen: isChosen,
+			})
+		}
+	}
+	return result
 }
 
 func (c *Client) convertUser(user *tg.User) *User {

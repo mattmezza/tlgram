@@ -26,12 +26,13 @@ type NewMessageUpdate struct {
 
 func (NewMessageUpdate) isUpdate() {}
 
-// MessageEditedUpdate is sent when a message is edited
+// MessageEditedUpdate is sent when a message is edited (including reaction changes)
 type MessageEditedUpdate struct {
 	ChatID    int64
 	MessageID int64
 	NewText   string
 	EditDate  int64
+	Reactions []Reaction // Updated reactions (may be nil if unchanged)
 }
 
 func (MessageEditedUpdate) isUpdate() {}
@@ -106,6 +107,15 @@ type DownloadCompleteUpdate struct {
 }
 
 func (DownloadCompleteUpdate) isUpdate() {}
+
+// MessageReactionsUpdate is sent when reactions on a message change
+type MessageReactionsUpdate struct {
+	ChatID    int64
+	MessageID int64
+	Reactions []Reaction
+}
+
+func (MessageReactionsUpdate) isUpdate() {}
 
 // ErrorUpdate is sent when an error occurs
 type ErrorUpdate struct {

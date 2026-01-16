@@ -17,17 +17,16 @@ func TestVimState_BasicNavigation(t *testing.T) {
 		name     string
 		key      string
 		expected Action
-		count    int
 	}{
-		{"move down j", "j", ActionMoveDown, 1},
-		{"move down arrow", "down", ActionMoveDown, 1},
-		{"move up k", "k", ActionMoveUp, 1},
-		{"move up arrow", "up", ActionMoveUp, 1},
-		{"move left h", "h", ActionMoveLeft, 1},
-		{"move right l", "l", ActionMoveRight, 1},
-		{"jump bottom G", "G", ActionJumpBottom, 0},
-		{"half page down", "ctrl+d", ActionHalfPageDown, 1},
-		{"half page up", "ctrl+u", ActionHalfPageUp, 1},
+		{"move down j", "j", ActionMoveDown},
+		{"move down arrow", "down", ActionMoveDown},
+		{"move up k", "k", ActionMoveUp},
+		{"move up arrow", "up", ActionMoveUp},
+		{"move left h", "h", ActionMoveLeft},
+		{"move right l", "l", ActionMoveRight},
+		{"jump bottom G", "G", ActionJumpBottom},
+		{"half page down", "ctrl+d", ActionHalfPageDown},
+		{"half page up", "ctrl+u", ActionHalfPageUp},
 	}
 
 	for _, tt := range tests {
@@ -36,9 +35,6 @@ func TestVimState_BasicNavigation(t *testing.T) {
 			result := v.ProcessKey(tt.key)
 			if result.Action != tt.expected {
 				t.Errorf("expected %v, got %v", tt.expected, result.Action)
-			}
-			if tt.count > 0 && result.Count != tt.count {
-				t.Errorf("expected count %d, got %d", tt.count, result.Count)
 			}
 		})
 	}
@@ -76,32 +72,28 @@ func TestVimState_KeyTimeout(t *testing.T) {
 	}
 }
 
-func TestVimState_CountPrefix(t *testing.T) {
-	v := NewVimState()
-
-	v.ProcessKey("5")
-	result := v.ProcessKey("j")
-
-	if result.Action != ActionMoveDown {
-		t.Errorf("expected ActionMoveDown, got %v", result.Action)
+func TestVimState_ReactionKeys(t *testing.T) {
+	tests := []struct {
+		key      string
+		expected Action
+	}{
+		{"1", ActionReact1},
+		{"2", ActionReact2},
+		{"3", ActionReact3},
+		{"4", ActionReact4},
+		{"5", ActionReact5},
+		{"6", ActionReact6},
+		{"0", ActionRemoveReact},
 	}
-	if result.Count != 5 {
-		t.Errorf("expected count 5, got %d", result.Count)
-	}
-}
 
-func TestVimState_MultiDigitCount(t *testing.T) {
-	v := NewVimState()
-
-	v.ProcessKey("1")
-	v.ProcessKey("5")
-	result := v.ProcessKey("k")
-
-	if result.Action != ActionMoveUp {
-		t.Errorf("expected ActionMoveUp, got %v", result.Action)
-	}
-	if result.Count != 15 {
-		t.Errorf("expected count 15, got %d", result.Count)
+	for _, tt := range tests {
+		t.Run("key_"+tt.key, func(t *testing.T) {
+			v := NewVimState()
+			result := v.ProcessKey(tt.key)
+			if result.Action != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result.Action)
+			}
+		})
 	}
 }
 
@@ -140,14 +132,10 @@ func TestVimState_SetMode(t *testing.T) {
 
 	// Buffer should be cleared
 	v.keyBuffer = []string{"g"}
-	v.count = 5
 	v.SetMode(ModeNormal)
 
 	if len(v.keyBuffer) != 0 {
 		t.Errorf("expected empty buffer, got %v", v.keyBuffer)
-	}
-	if v.count != 0 {
-		t.Errorf("expected count 0, got %d", v.count)
 	}
 }
 

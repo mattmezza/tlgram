@@ -19,6 +19,7 @@ A terminal-based Telegram client with vim keybindings, designed for tmux workflo
 - **Unread indicator** - Visual badge for unread messages
 - **Notifications** - Custom notification commands (can include terminal bell for tmux visual bell)
 - **Watch/Mute** - Watch (`w`) for priority chats, mute individual (`m`) or all (`M`)
+- **Reactions** - View and add reactions with `1-6` keys (configurable emojis), remove with `0`
 - **Pure Go** - No CGO dependencies, uses gotd/td library
 
 ## Installation
@@ -185,6 +186,8 @@ tlgram --default-config    # Print default config (useful for resetting)
 | `U` | Mark dialog as unread |
 | `I` | Toggle chat ID display in header |
 | `d` | Download media |
+| `1-6` | Add reaction (configurable emojis) |
+| `0` | Remove your reaction |
 | `w` | Watch chat (always notify, bypasses mutes) |
 | `m` | Mute notifications for this chat |
 | `M` | Mute ALL notifications (global toggle) |
@@ -266,6 +269,11 @@ show_chat_id = false
 command = "echo -e '\\a' && notify-send 'tlgram' '%s: %m'"
 # Start with all notifications muted (toggle with 'M' key)
 start_muted = false
+
+[reaction]
+# Emojis for quick reactions using number keys 1-6
+# Press 0 to remove your reaction
+emojis = ["👍", "👎", "❤️", "🔥", "🎉", "😁"]
 
 [chat_aliases]
 work = "@john_doe"

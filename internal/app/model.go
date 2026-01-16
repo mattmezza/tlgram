@@ -131,7 +131,8 @@ type Message struct {
 	Text           string
 	IsOwn          bool
 	Time           time.Time
-	ReplyToID      int64 // ID of message this is replying to (0 if not a reply)
+	ReplyToID      int64               // ID of message this is replying to (0 if not a reply)
+	Reactions      []telegram.Reaction // Reactions on this message
 }
 
 // New creates a new application model
@@ -239,6 +240,14 @@ type editMessageCompleteMsg struct {
 type deleteMessageCompleteMsg struct {
 	chatID    int64
 	messageID int64
+	err       error
+}
+
+type reactionSentMsg struct {
+	chatID    int64
+	messageID int64
+	emoji     string
+	added     bool // True if reaction was added, false if removed
 	err       error
 }
 
@@ -717,6 +726,104 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, cmd
+
+	case reactionSentMsg:
+		var cmd tea.Cmd
+		if msg.err != nil {
+			m.statusBar, cmd = m.statusBar.ShowNotification("Reaction failed: "+msg.err.Error(), 3*time.Second)
+		} else {
+			// Update local message state with the reaction change
+			// NOTE: Non-Premium users can only have ONE reaction per message.
+			// Adding a new reaction REPLACES any existing chosen reaction.
+			for i, message := range m.messages {
+				if message.ID == msg.messageID {
+					hadReactions := len(m.messages[i].Reactions) > 0
+					if msg.added && msg.emoji != "" {
+						// Add/replace reaction - first remove any existing chosen reaction
+						newReactions := make([]telegram.Reaction, 0, len(m.messages[i].Reactions))
+						for _, r := range m.messages[i].Reactions {
+							if r.Chosen {
+								// Remove our previous reaction
+								if r.Count > 1 {
+									r.Count--
+									r.Chosen = false
+									newReactions = append(newReactions, r)
+								}
+								// else: was only us, remove entirely
+							} else {
+								newReactions = append(newReactions, r)
+							}
+						}
+						// Now add the new reaction
+						found := false
+						for j, r := range newReactions {
+							if r.Emoji == msg.emoji {
+								newReactions[j].Count++
+								newReactions[j].Chosen = true
+								found = true
+								break
+							}
+						}
+						if !found {
+							newReactions = append(newReactions, telegram.Reaction{
+								Emoji:  msg.emoji,
+								Count:  1,
+								Chosen: true,
+							})
+						}
+						m.messages[i].Reactions = newReactions
+					} else if !msg.added {
+						// Remove reaction (toggle off or 0 key)
+						newReactions := make([]telegram.Reaction, 0, len(m.messages[i].Reactions))
+						for _, r := range m.messages[i].Reactions {
+							shouldRemove := false
+							if msg.emoji != "" {
+								// Remove specific emoji
+								shouldRemove = r.Emoji == msg.emoji && r.Chosen
+							} else {
+								// Remove all chosen (0 key)
+								shouldRemove = r.Chosen
+							}
+							if shouldRemove {
+								if r.Count > 1 {
+									r.Count--
+									r.Chosen = false
+									newReactions = append(newReactions, r)
+								}
+								// else: remove entirely
+							} else {
+								newReactions = append(newReactions, r)
+							}
+						}
+						m.messages[i].Reactions = newReactions
+					}
+					// Adjust viewport if reactions changed on this message
+					hasReactions := len(m.messages[i].Reactions) > 0
+					if hadReactions != hasReactions {
+						// Reaction line was added or removed, need to adjust
+						totalLines := m.getTotalLines()
+						viewportHeight := m.getViewportHeight()
+						maxViewportStart := totalLines - viewportHeight
+						if maxViewportStart < 0 {
+							maxViewportStart = 0
+						}
+						// If we're at the bottom, stay at bottom
+						if m.viewportStart > maxViewportStart {
+							m.viewportStart = maxViewportStart
+						}
+						// Ensure cursor is visible
+						m.adjustViewport()
+					}
+					break
+				}
+			}
+			if msg.added {
+				m.statusBar, cmd = m.statusBar.ShowNotification("Reacted with "+msg.emoji, 1*time.Second)
+			} else {
+				m.statusBar, cmd = m.statusBar.ShowNotification("Reaction removed", 1*time.Second)
+			}
+		}
+		return m, cmd
 	}
 
 	return m, tea.Batch(cmds...)
@@ -809,6 +916,40 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case telegram.MessageEditedUpdate:
+		// Update message text and/or reactions
+		if m.currentChat != nil && m.currentChat.ID == u.ChatID {
+			for i, msg := range m.messages {
+				if msg.ID == u.MessageID {
+					// Update text if changed
+					if u.NewText != "" && u.NewText != m.messages[i].Text {
+						m.messages[i].Text = u.NewText
+					}
+					// Update reactions if provided
+					if u.Reactions != nil {
+						hadReactions := len(m.messages[i].Reactions) > 0
+						m.messages[i].Reactions = u.Reactions
+						hasReactions := len(m.messages[i].Reactions) > 0
+						// Adjust viewport if reactions changed (line count may have changed)
+						if hadReactions != hasReactions {
+							totalLines := m.getTotalLines()
+							viewportHeight := m.getViewportHeight()
+							maxViewportStart := totalLines - viewportHeight
+							if maxViewportStart < 0 {
+								maxViewportStart = 0
+							}
+							if m.viewportStart > maxViewportStart {
+								m.viewportStart = maxViewportStart
+							}
+							m.adjustViewport()
+						}
+					}
+					break
+				}
+			}
+		}
+		return m, nil
+
 	case telegram.ChatUpdate:
 		// Update chat in list
 		chat := convertTelegramChat(u.Chat)
@@ -851,6 +992,33 @@ func (m Model) handleTelegramUpdate(update telegram.Update) (Model, tea.Cmd) {
 					m.currentChat.MarkedUnread = u.MarkedUnread
 				}
 				break
+			}
+		}
+		return m, nil
+
+	case telegram.MessageReactionsUpdate:
+		// Update reactions on a message (from server, e.g., other clients)
+		if m.currentChat != nil && m.currentChat.ID == u.ChatID {
+			for i, msg := range m.messages {
+				if msg.ID == u.MessageID {
+					hadReactions := len(m.messages[i].Reactions) > 0
+					m.messages[i].Reactions = u.Reactions
+					hasReactions := len(m.messages[i].Reactions) > 0
+					// Adjust viewport if reactions changed (line count may have changed)
+					if hadReactions != hasReactions {
+						totalLines := m.getTotalLines()
+						viewportHeight := m.getViewportHeight()
+						maxViewportStart := totalLines - viewportHeight
+						if maxViewportStart < 0 {
+							maxViewportStart = 0
+						}
+						if m.viewportStart > maxViewportStart {
+							m.viewportStart = maxViewportStart
+						}
+						m.adjustViewport()
+					}
+					break
+				}
 			}
 		}
 		return m, nil
@@ -1060,6 +1228,22 @@ func (m Model) deleteMessage(chatID int64, messageID int64) tea.Cmd {
 	}
 }
 
+func (m Model) sendReaction(chatID int64, messageID int64, emoji string) tea.Cmd {
+	if m.telegramClient == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		result, err := m.telegramClient.SendReaction(chatID, int(messageID), emoji)
+		msg := reactionSentMsg{chatID: chatID, messageID: messageID, err: err}
+		if result != nil {
+			msg.emoji = result.Emoji
+			msg.added = result.Added
+		}
+		return msg
+	}
+}
+
 // startAutoMarkReadTimer starts a timer to auto-mark messages as read
 // Returns nil if auto-mark is disabled or there are no unread messages
 func (m *Model) startAutoMarkReadTimer() tea.Cmd {
@@ -1130,6 +1314,7 @@ func convertTelegramMessage(m *telegram.Message) *Message {
 		IsOwn:          m.IsOutgoing,
 		Time:           m.Date,
 		ReplyToID:      m.ReplyToID,
+		Reactions:      m.Reactions,
 	}
 }
 
@@ -1237,17 +1422,13 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case keybind.ActionMoveDown:
-		for i := 0; i < result.Count; i++ {
-			if m.chatIdx < len(m.chats)-1 {
-				m.chatIdx++
-			}
+		if m.chatIdx < len(m.chats)-1 {
+			m.chatIdx++
 		}
 
 	case keybind.ActionMoveUp:
-		for i := 0; i < result.Count; i++ {
-			if m.chatIdx > 0 {
-				m.chatIdx--
-			}
+		if m.chatIdx > 0 {
+			m.chatIdx--
 		}
 
 	case keybind.ActionJumpTop:
@@ -1263,10 +1444,9 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 10
 		}
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.chatIdx < len(m.chats)-1 {
-				m.chatIdx++
-			}
+		m.chatIdx += pageSize
+		if m.chatIdx >= len(m.chats) {
+			m.chatIdx = len(m.chats) - 1
 		}
 
 	case keybind.ActionPageUp:
@@ -1274,10 +1454,9 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 10
 		}
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.chatIdx > 0 {
-				m.chatIdx--
-			}
+		m.chatIdx -= pageSize
+		if m.chatIdx < 0 {
+			m.chatIdx = 0
 		}
 
 	case keybind.ActionHalfPageDown:
@@ -1285,10 +1464,9 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 5
 		}
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.chatIdx < len(m.chats)-1 {
-				m.chatIdx++
-			}
+		m.chatIdx += pageSize
+		if m.chatIdx >= len(m.chats) {
+			m.chatIdx = len(m.chats) - 1
 		}
 
 	case keybind.ActionHalfPageUp:
@@ -1296,10 +1474,9 @@ func (m Model) handleChatListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 5
 		}
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.chatIdx > 0 {
-				m.chatIdx--
-			}
+		m.chatIdx -= pageSize
+		if m.chatIdx < 0 {
+			m.chatIdx = 0
 		}
 
 	case keybind.ActionSelect:
@@ -1383,8 +1560,8 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case keybind.ActionMoveDown:
-		// Move cursor down by lines
-		m.cursorLine += result.Count
+		// Move cursor down by one line
+		m.cursorLine++
 		m.adjustViewport()
 		// Reset new message counter if at bottom
 		totalLines := m.getTotalLines()
@@ -1394,8 +1571,8 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case keybind.ActionMoveUp:
-		// Move cursor up by lines
-		m.cursorLine -= result.Count
+		// Move cursor up by one line
+		m.cursorLine--
 		m.adjustViewport()
 		// Load more messages when reaching the top
 		if m.cursorLine == 0 && !m.loadingMore {
@@ -1427,7 +1604,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 1
 		}
-		m.cursorLine += pageSize * result.Count
+		m.cursorLine += pageSize
 		m.adjustViewport()
 		// Reset new message counter if at bottom
 		totalLines := m.getTotalLines()
@@ -1441,7 +1618,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 1
 		}
-		m.cursorLine -= pageSize * result.Count
+		m.cursorLine -= pageSize
 		m.adjustViewport()
 		// Load more messages when reaching the top
 		if m.cursorLine == 0 && !m.loadingMore {
@@ -1454,7 +1631,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 1
 		}
-		m.cursorLine += pageSize * result.Count
+		m.cursorLine += pageSize
 		m.adjustViewport()
 		// Reset new message counter if at bottom
 		totalLines := m.getTotalLines()
@@ -1468,7 +1645,7 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pageSize < 1 {
 			pageSize = 1
 		}
-		m.cursorLine -= pageSize * result.Count
+		m.cursorLine -= pageSize
 		m.adjustViewport()
 		// Load more messages when reaching the top
 		if m.cursorLine == 0 && !m.loadingMore {
@@ -1732,6 +1909,48 @@ func (m Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusBar, cmd = m.statusBar.ShowNotification(msg, 2*time.Second)
 			return m, cmd
 		}
+
+	case keybind.ActionReact1, keybind.ActionReact2, keybind.ActionReact3,
+		keybind.ActionReact4, keybind.ActionReact5, keybind.ActionReact6:
+		// Send reaction to message at cursor (toggle behavior)
+		if m.currentChat == nil {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No chat selected", 2*time.Second)
+			return m, cmd
+		}
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx < 0 || msgIdx >= len(m.messages) {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No message at cursor", 2*time.Second)
+			return m, cmd
+		}
+		msg := m.messages[msgIdx]
+		// Map action to emoji index
+		emojiIdx := int(result.Action - keybind.ActionReact1)
+		if emojiIdx >= len(m.config.Reaction.Emojis) {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No emoji configured for this key", 2*time.Second)
+			return m, cmd
+		}
+		emoji := m.config.Reaction.Emojis[emojiIdx]
+		// Always send the emoji - API layer handles toggle via MESSAGE_NOT_MODIFIED
+		return m, m.sendReaction(m.currentChat.ID, msg.ID, emoji)
+
+	case keybind.ActionRemoveReact:
+		// Remove reaction from message at cursor
+		if m.currentChat == nil {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No chat selected", 2*time.Second)
+			return m, cmd
+		}
+		msgIdx := m.getMessageAtCursor()
+		if msgIdx < 0 || msgIdx >= len(m.messages) {
+			var cmd tea.Cmd
+			m.statusBar, cmd = m.statusBar.ShowNotification("No message at cursor", 2*time.Second)
+			return m, cmd
+		}
+		msg := m.messages[msgIdx]
+		return m, m.sendReaction(m.currentChat.ID, msg.ID, "") // Empty string removes reaction
 	}
 
 	m.statusBar.SetMode(m.vim.Mode())
@@ -2329,6 +2548,14 @@ func (m Model) viewHelp() string {
 	content.WriteString(keyStyle.Render("  M") + descStyle.Render("            Mute ALL notifications"))
 	content.WriteString("\n\n")
 
+	// Reactions
+	content.WriteString(categoryStyle.Render("REACTIONS"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  1-6") + descStyle.Render("          Add reaction (👍 👎 ❤️ 🔥 🎉 😁)"))
+	content.WriteString("\n")
+	content.WriteString(keyStyle.Render("  0") + descStyle.Render("            Remove reaction"))
+	content.WriteString("\n\n")
+
 	// Switcher
 	content.WriteString(categoryStyle.Render("SWITCHER"))
 	content.WriteString("\n")
@@ -2366,12 +2593,13 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // messageLine represents a line and which message it belongs to
 type messageLine struct {
 	msgIdx    int
-	lineType  int    // 0=reply, 1=firstLine, 2=continuation
-	sender    string // raw sender name (for first line)
-	content   string // message content or reply text
-	timestamp string // formatted timestamp (for first line)
-	isOwn     bool   // whether this is own message
-	isUnread  bool   // whether this message is unread (for visual indicator)
+	lineType  int                 // 0=reply, 1=firstLine, 2=continuation, 3=reactions
+	sender    string              // raw sender name (for first line)
+	content   string              // message content or reply text
+	timestamp string              // formatted timestamp (for first line)
+	isOwn     bool                // whether this is own message
+	isUnread  bool                // whether this message is unread (for visual indicator)
+	reactions []telegram.Reaction // reactions (for lineType 3)
 }
 
 // formatRelativeTime formats a time as relative to now
@@ -2500,6 +2728,17 @@ func (m Model) renderMessages(maxHeight int) string {
 					isUnread: isUnread,
 				})
 			}
+		}
+
+		// Reactions line (if any)
+		if len(msg.Reactions) > 0 {
+			allLines = append(allLines, messageLine{
+				msgIdx:    msgIdx,
+				lineType:  3, // reactions
+				sender:    senderName,
+				reactions: msg.Reactions,
+				isUnread:  isUnread,
+			})
 		}
 	}
 
@@ -2633,6 +2872,25 @@ func (m Model) renderLine(line messageLine, contentWidth int, maxSenderLen int, 
 	case 2: // Continuation line
 		indent := strings.Repeat(" ", maxSenderLen)
 		result = unreadPrefix + textStyle.Render(indent+line.content)
+
+	case 3: // Reactions line
+		indent := strings.Repeat(" ", maxSenderLen)
+		var reactionParts []string
+		reactionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		reactionChosenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+		if isCursor {
+			reactionStyle = reactionStyle.Background(cursorBg)
+			reactionChosenStyle = reactionChosenStyle.Background(cursorBg)
+		}
+		for _, r := range line.reactions {
+			reactionText := fmt.Sprintf("%s %d", r.Emoji, r.Count)
+			if r.Chosen {
+				reactionParts = append(reactionParts, reactionChosenStyle.Render("["+reactionText+"]"))
+			} else {
+				reactionParts = append(reactionParts, reactionStyle.Render(reactionText))
+			}
+		}
+		result = unreadPrefix + textStyle.Render(indent+"  ") + strings.Join(reactionParts, " ")
 	}
 
 	// Pad to full width for cursor line
@@ -2760,6 +3018,10 @@ func (m Model) getMessageAtCursor() int {
 		for range wrappedLines {
 			lineToMsg = append(lineToMsg, msgIdx)
 		}
+		// Account for reaction line
+		if len(msg.Reactions) > 0 {
+			lineToMsg = append(lineToMsg, msgIdx)
+		}
 	}
 
 	// Clamp cursorLine
@@ -2812,6 +3074,10 @@ func (m Model) getTotalLines() int {
 		contLineWidth := contentWidth - maxSenderLen - 4
 		wrappedLines := wrapTextFirstLine(msg.Text, firstLineWidth, contLineWidth)
 		totalLines += len(wrappedLines)
+		// Account for reaction line
+		if len(msg.Reactions) > 0 {
+			totalLines++
+		}
 	}
 	return totalLines
 }

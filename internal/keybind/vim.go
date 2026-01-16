@@ -3,7 +3,6 @@ package keybind
 import (
 	"strings"
 	"time"
-	"unicode"
 )
 
 // Mode represents the current vim mode
@@ -72,12 +71,20 @@ const (
 	ActionToggleMute       // m - toggle mute for current chat
 	ActionToggleGlobalMute // M - toggle global mute for all notifications
 	ActionToggleWatch      // w - toggle watch for current chat (always notify)
+
+	// Reactions
+	ActionReact1      // 1 - first reaction emoji
+	ActionReact2      // 2 - second reaction emoji
+	ActionReact3      // 3 - third reaction emoji
+	ActionReact4      // 4 - fourth reaction emoji
+	ActionReact5      // 5 - fifth reaction emoji
+	ActionReact6      // 6 - sixth reaction emoji
+	ActionRemoveReact // 0 - remove own reaction
 )
 
-// Result holds the action and any associated count
+// Result holds the action
 type Result struct {
 	Action Action
-	Count  int
 }
 
 // VimState manages vim keybinding state
@@ -85,7 +92,6 @@ type VimState struct {
 	mode      Mode
 	keyBuffer []string
 	lastKeyAt time.Time
-	count     int
 }
 
 const keyTimeout = 500 * time.Millisecond
@@ -107,7 +113,6 @@ func (v *VimState) Mode() Mode {
 func (v *VimState) SetMode(mode Mode) {
 	v.mode = mode
 	v.keyBuffer = v.keyBuffer[:0]
-	v.count = 0
 }
 
 // ProcessKey processes a key and returns the resulting action
@@ -117,7 +122,6 @@ func (v *VimState) ProcessKey(key string) Result {
 	// Reset buffer if timeout expired
 	if now.Sub(v.lastKeyAt) > keyTimeout {
 		v.keyBuffer = v.keyBuffer[:0]
-		v.count = 0
 	}
 	v.lastKeyAt = now
 
@@ -133,36 +137,24 @@ func (v *VimState) ProcessKey(key string) Result {
 }
 
 func (v *VimState) processNormalMode(key string) Result {
-	// Handle digit for count accumulation
-	if len(key) == 1 && unicode.IsDigit(rune(key[0])) && (v.count > 0 || key != "0") {
-		v.count = v.count*10 + int(key[0]-'0')
-		return Result{Action: ActionNone}
-	}
-
 	// Add key to buffer
 	v.keyBuffer = append(v.keyBuffer, key)
 	sequence := strings.Join(v.keyBuffer, "")
-
-	// Get effective count (minimum 1)
-	count := v.count
-	if count == 0 {
-		count = 1
-	}
 
 	// Check for complete sequences
 	switch sequence {
 	case "j", "down":
 		v.reset()
-		return Result{Action: ActionMoveDown, Count: count}
+		return Result{Action: ActionMoveDown}
 	case "k", "up":
 		v.reset()
-		return Result{Action: ActionMoveUp, Count: count}
+		return Result{Action: ActionMoveUp}
 	case "h", "left":
 		v.reset()
-		return Result{Action: ActionMoveLeft, Count: count}
+		return Result{Action: ActionMoveLeft}
 	case "l", "right":
 		v.reset()
-		return Result{Action: ActionMoveRight, Count: count}
+		return Result{Action: ActionMoveRight}
 	case "gg":
 		v.reset()
 		return Result{Action: ActionJumpTop}
@@ -180,16 +172,16 @@ func (v *VimState) processNormalMode(key string) Result {
 		return Result{Action: ActionViewportBottom}
 	case "ctrl+d":
 		v.reset()
-		return Result{Action: ActionHalfPageDown, Count: count}
+		return Result{Action: ActionHalfPageDown}
 	case "ctrl+u":
 		v.reset()
-		return Result{Action: ActionHalfPageUp, Count: count}
+		return Result{Action: ActionHalfPageUp}
 	case "ctrl+f":
 		v.reset()
-		return Result{Action: ActionPageDown, Count: count}
+		return Result{Action: ActionPageDown}
 	case "ctrl+b":
 		v.reset()
-		return Result{Action: ActionPageUp, Count: count}
+		return Result{Action: ActionPageUp}
 	case "i":
 		v.reset()
 		v.mode = ModeInsert
@@ -252,6 +244,28 @@ func (v *VimState) processNormalMode(key string) Result {
 	case "w":
 		v.reset()
 		return Result{Action: ActionToggleWatch}
+	// Reactions
+	case "1":
+		v.reset()
+		return Result{Action: ActionReact1}
+	case "2":
+		v.reset()
+		return Result{Action: ActionReact2}
+	case "3":
+		v.reset()
+		return Result{Action: ActionReact3}
+	case "4":
+		v.reset()
+		return Result{Action: ActionReact4}
+	case "5":
+		v.reset()
+		return Result{Action: ActionReact5}
+	case "6":
+		v.reset()
+		return Result{Action: ActionReact6}
+	case "0":
+		v.reset()
+		return Result{Action: ActionRemoveReact}
 	}
 
 	// Unknown sequence - reset if not a prefix
@@ -276,7 +290,6 @@ func (v *VimState) processInsertMode(key string) Result {
 
 func (v *VimState) reset() {
 	v.keyBuffer = v.keyBuffer[:0]
-	v.count = 0
 }
 
 func (v *VimState) isPrefixOfKnownSequence(prefix string) bool {

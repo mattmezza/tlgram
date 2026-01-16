@@ -45,6 +45,13 @@ var (
 				Background(lipgloss.Color("236")).
 				Foreground(lipgloss.Color("252")).
 				Padding(0, 1)
+
+	reactionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245"))
+
+	reactionChosenStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Bold(true)
 )
 
 // Model represents the chat view
@@ -188,18 +195,14 @@ func (m Model) handleNormalMode(_ tea.KeyMsg, key string) (Model, tea.Cmd) {
 
 	switch result.Action {
 	case keybind.ActionMoveDown:
-		for i := 0; i < result.Count; i++ {
-			if m.selectedIdx < len(m.messages)-1 {
-				m.selectedIdx++
-			}
+		if m.selectedIdx < len(m.messages)-1 {
+			m.selectedIdx++
 		}
 		m.updateViewport()
 
 	case keybind.ActionMoveUp:
-		for i := 0; i < result.Count; i++ {
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
-			}
+		if m.selectedIdx > 0 {
+			m.selectedIdx--
 		}
 		m.updateViewport()
 
@@ -215,19 +218,17 @@ func (m Model) handleNormalMode(_ tea.KeyMsg, key string) (Model, tea.Cmd) {
 
 	case keybind.ActionHalfPageDown:
 		pageSize := m.viewport.Height / 2
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.selectedIdx < len(m.messages)-1 {
-				m.selectedIdx++
-			}
+		m.selectedIdx += pageSize
+		if m.selectedIdx >= len(m.messages) {
+			m.selectedIdx = len(m.messages) - 1
 		}
 		m.updateViewport()
 
 	case keybind.ActionHalfPageUp:
 		pageSize := m.viewport.Height / 2
-		for i := 0; i < pageSize*result.Count; i++ {
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
-			}
+		m.selectedIdx -= pageSize
+		if m.selectedIdx < 0 {
+			m.selectedIdx = 0
 		}
 		m.updateViewport()
 
@@ -385,6 +386,21 @@ func (m Model) renderMessage(msg *telegram.Message, selected bool) string {
 	}
 
 	parts = append(parts, msgLine)
+
+	// Reactions
+	if len(msg.Reactions) > 0 {
+		var reactionParts []string
+		for _, r := range msg.Reactions {
+			reactionText := fmt.Sprintf("%s %d", r.Emoji, r.Count)
+			if r.Chosen {
+				reactionParts = append(reactionParts, reactionChosenStyle.Render("["+reactionText+"]"))
+			} else {
+				reactionParts = append(reactionParts, reactionStyle.Render(reactionText))
+			}
+		}
+		reactionsLine := "  " + strings.Join(reactionParts, " ")
+		parts = append(parts, reactionsLine)
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }

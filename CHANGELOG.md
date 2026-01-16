@@ -2,6 +2,20 @@
 
 All notable changes to tlgram will be documented in this file.
 
+## [0.5] - 2026-01-16
+
+### Added
+- Message reactions support (closes #2)
+  - View reactions on messages (displayed below message text)
+  - Add reactions with number keys `1-6` (configurable emojis in config)
+  - Remove your reaction with `0` key
+  - Toggle behavior: pressing same reaction key removes it
+  - Real-time sync: reactions from other clients appear instantly
+  - Configurable reaction emojis via `reaction.emojis` in config
+
+### Fixed
+- Reactions now correctly marked as "yours" when loading chat history
+
 ## [0.4] - 2026-01-15
 
 Same as v0.3 with CI fixes.

@@ -23,6 +23,7 @@ type Config struct {
 	General      GeneralConfig      `toml:"general"`
 	Appearance   AppearanceConfig   `toml:"appearance"`
 	Notification NotificationConfig `toml:"notification"`
+	Reaction     ReactionConfig     `toml:"reaction"`
 	ChatAliases  map[string]string  `toml:"chat_aliases"`
 	Telegram     TelegramConfig     `toml:"telegram"`
 }
@@ -53,6 +54,11 @@ type NotificationConfig struct {
 	StartMuted bool   `toml:"start_muted"` // Start with global mute enabled
 }
 
+// ReactionConfig contains reaction settings
+type ReactionConfig struct {
+	Emojis []string `toml:"emojis"` // Emojis for quick reactions (1-6 keys)
+}
+
 // Default returns the default configuration
 func Default() *Config {
 	homeDir, _ := os.UserHomeDir()
@@ -73,6 +79,9 @@ func Default() *Config {
 		Notification: NotificationConfig{
 			Command:    "", // Disabled by default
 			StartMuted: false,
+		},
+		Reaction: ReactionConfig{
+			Emojis: []string{"👍", "👎", "❤️", "🔥", "🎉", "😁"},
 		},
 		ChatAliases: make(map[string]string),
 		Telegram: TelegramConfig{
@@ -233,6 +242,11 @@ command = ""
 
 # Start with all notifications muted (toggle with 'M' key)
 start_muted = false
+
+[reaction]
+# Emojis for quick reactions using number keys 1-6
+# Press 0 to remove your reaction
+emojis = ["👍", "👎", "❤️", "🔥", "🎉", "😁"]
 
 [chat_aliases]
 # Define shortcuts for your frequent chats

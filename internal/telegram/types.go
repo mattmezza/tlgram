@@ -121,6 +121,14 @@ type Message struct {
 	ReplyToID      int64
 	ReplyTo        *Message
 	Media          *MediaInfo
+	Reactions      []Reaction
+}
+
+// Reaction represents a reaction on a message
+type Reaction struct {
+	Emoji  string // The emoji used for this reaction
+	Count  int    // Number of users who reacted with this emoji
+	Chosen bool   // Whether the current user reacted with this emoji
 }
 
 // FormattedText represents text with formatting entities
