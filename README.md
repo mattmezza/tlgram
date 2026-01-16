@@ -143,6 +143,8 @@ tlgram --help              # Show help
 tlgram --version           # Show version
 tlgram --changelog         # Show changelog
 tlgram --default-config    # Print default config (useful for resetting)
+tlgram --check-update      # Check if a new version is available
+tlgram --update            # Update to the latest version
 ```
 
 ### Keybindings

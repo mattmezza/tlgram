@@ -25,9 +25,9 @@ builds:
 
 archives:
   - format: tar.gz
+    # Note: version excluded for go-selfupdate compatibility
     name_template: >-
       {{ .ProjectName }}_
-      {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
     format_overrides:

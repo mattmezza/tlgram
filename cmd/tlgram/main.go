@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/creativeprojects/go-selfupdate"
 	"github.com/spf13/pflag"
 
 	"github.com/mattmezza/tlgram"
@@ -31,6 +33,8 @@ func main() {
 	helpFlag := pflag.BoolP("help", "h", false, "Print help and exit")
 	changelogFlag := pflag.Bool("changelog", false, "Print changelog and exit")
 	defaultConfigFlag := pflag.Bool("default-config", false, "Print default config to stdout")
+	updateFlag := pflag.Bool("update", false, "Update tlgram to the latest version")
+	checkUpdateFlag := pflag.Bool("check-update", false, "Check if a new version is available")
 
 	pflag.Parse()
 
@@ -51,6 +55,16 @@ func main() {
 
 	if *defaultConfigFlag {
 		fmt.Print(tlgram.DefaultConfig)
+		os.Exit(0)
+	}
+
+	if *checkUpdateFlag {
+		checkForUpdate()
+		os.Exit(0)
+	}
+
+	if *updateFlag {
+		doSelfUpdate()
 		os.Exit(0)
 	}
 
@@ -109,6 +123,8 @@ OPTIONS:
     -v, --version        Print version and exit
         --changelog      Print changelog and exit
         --default-config Print default config to stdout
+        --check-update   Check if a new version is available
+        --update         Update tlgram to the latest version
     -h, --help           Print this help message
 
 EXAMPLES:
@@ -143,4 +159,69 @@ VIM KEYBINDINGS:
     q           Quit application
 
 For more information: https://github.com/mattmezza/tlgram`)
+}
+
+func checkForUpdate() {
+	latest, found, err := selfupdate.DetectLatest(context.Background(), selfupdate.ParseSlug("mattmezza/tlgram"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking for updates: %v\n", err)
+		os.Exit(1)
+	}
+	if !found {
+		fmt.Println("No releases found")
+		return
+	}
+
+	currentVersion := version
+	if strings.HasPrefix(currentVersion, "v") {
+		currentVersion = currentVersion[1:]
+	}
+
+	latestVersion := latest.Version()
+	if latestVersion == currentVersion {
+		fmt.Printf("tlgram %s is already the latest version\n", version)
+	} else {
+		fmt.Printf("Current version: %s\n", version)
+		fmt.Printf("Latest version:  v%s\n", latestVersion)
+		fmt.Println("\nRun 'tlgram --update' to update")
+	}
+}
+
+func doSelfUpdate() {
+	latest, found, err := selfupdate.DetectLatest(context.Background(), selfupdate.ParseSlug("mattmezza/tlgram"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking for updates: %v\n", err)
+		os.Exit(1)
+	}
+	if !found {
+		fmt.Println("No releases found")
+		return
+	}
+
+	currentVersion := version
+	if strings.HasPrefix(currentVersion, "v") {
+		currentVersion = currentVersion[1:]
+	}
+
+	latestVersion := latest.Version()
+	if latestVersion == currentVersion {
+		fmt.Printf("tlgram %s is already the latest version\n", version)
+		return
+	}
+
+	fmt.Printf("Updating tlgram from %s to v%s...\n", version, latestVersion)
+
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error finding executable: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := selfupdate.UpdateTo(context.Background(), latest.AssetURL, latest.AssetName, exe); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Successfully updated to v%s\n", latestVersion)
+	fmt.Println("\nChangelog: https://github.com/mattmezza/tlgram/blob/main/CHANGELOG.md")
 }
