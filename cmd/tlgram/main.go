@@ -172,11 +172,7 @@ func checkForUpdate() {
 		return
 	}
 
-	currentVersion := version
-	if strings.HasPrefix(currentVersion, "v") {
-		currentVersion = currentVersion[1:]
-	}
-
+	currentVersion := strings.TrimPrefix(version, "v")
 	latestVersion := latest.Version()
 	if latestVersion == currentVersion {
 		fmt.Printf("tlgram %s is already the latest version\n", version)
@@ -198,11 +194,7 @@ func doSelfUpdate() {
 		return
 	}
 
-	currentVersion := version
-	if strings.HasPrefix(currentVersion, "v") {
-		currentVersion = currentVersion[1:]
-	}
-
+	currentVersion := strings.TrimPrefix(version, "v")
 	latestVersion := latest.Version()
 	if latestVersion == currentVersion {
 		fmt.Printf("tlgram %s is already the latest version\n", version)
