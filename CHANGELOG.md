@@ -2,12 +2,13 @@
 
 All notable changes to tlgram will be documented in this file.
 
-## [0.6] - 2026-01-16
+## [0.6] - 2026-01-19
 
 ### Added
 - Self-update support (closes #5)
   - `--check-update` flag to check if a new version is available
   - `--update` flag to update tlgram to the latest version
+  - Downloads directly from GitHub releases (no external dependencies)
 
 ## [0.5] - 2026-01-16
 

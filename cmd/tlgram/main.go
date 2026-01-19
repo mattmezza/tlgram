@@ -1,14 +1,18 @@
 package main
 
 import (
-	"context"
+	"archive/tar"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/creativeprojects/go-selfupdate"
 	"github.com/spf13/pflag"
 
 	"github.com/mattmezza/tlgram"
@@ -161,47 +165,85 @@ VIM KEYBINDINGS:
 For more information: https://github.com/mattmezza/tlgram`)
 }
 
+type githubRelease struct {
+	TagName string `json:"tag_name"`
+	Assets  []struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+func getLatestRelease() (*githubRelease, error) {
+	resp, err := http.Get("https://api.github.com/repos/mattmezza/tlgram/releases/latest")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	var release githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, err
+	}
+	return &release, nil
+}
+
+func getAssetURL(release *githubRelease) string {
+	// Build expected asset name for current platform
+	ext := ".tar.gz"
+	if runtime.GOOS == "windows" {
+		ext = ".zip"
+	}
+	expectedName := fmt.Sprintf("tlgram_%s_%s%s", runtime.GOOS, runtime.GOARCH, ext)
+
+	for _, asset := range release.Assets {
+		if asset.Name == expectedName {
+			return asset.BrowserDownloadURL
+		}
+	}
+	return ""
+}
+
 func checkForUpdate() {
-	latest, found, err := selfupdate.DetectLatest(context.Background(), selfupdate.ParseSlug("mattmezza/tlgram"))
+	release, err := getLatestRelease()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error checking for updates: %v\n", err)
 		os.Exit(1)
 	}
-	if !found {
-		fmt.Println("No releases found")
-		return
-	}
 
-	currentVersion := strings.TrimPrefix(version, "v")
-	latestVersion := latest.Version()
-	if latestVersion == currentVersion {
+	latestVersion := release.TagName
+	if version == latestVersion || "v"+version == latestVersion {
 		fmt.Printf("tlgram %s is already the latest version\n", version)
 	} else {
 		fmt.Printf("Current version: %s\n", version)
-		fmt.Printf("Latest version:  v%s\n", latestVersion)
+		fmt.Printf("Latest version:  %s\n", latestVersion)
 		fmt.Println("\nRun 'tlgram --update' to update")
 	}
 }
 
 func doSelfUpdate() {
-	latest, found, err := selfupdate.DetectLatest(context.Background(), selfupdate.ParseSlug("mattmezza/tlgram"))
+	release, err := getLatestRelease()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error checking for updates: %v\n", err)
 		os.Exit(1)
 	}
-	if !found {
-		fmt.Println("No releases found")
-		return
-	}
 
-	currentVersion := strings.TrimPrefix(version, "v")
-	latestVersion := latest.Version()
-	if latestVersion == currentVersion {
+	latestVersion := release.TagName
+	if version == latestVersion || "v"+version == latestVersion {
 		fmt.Printf("tlgram %s is already the latest version\n", version)
 		return
 	}
 
-	fmt.Printf("Updating tlgram from %s to v%s...\n", version, latestVersion)
+	assetURL := getAssetURL(release)
+	if assetURL == "" {
+		fmt.Fprintf(os.Stderr, "No release found for %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updating tlgram from %s to %s...\n", version, latestVersion)
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -209,11 +251,73 @@ func doSelfUpdate() {
 		os.Exit(1)
 	}
 
-	if err := selfupdate.UpdateTo(context.Background(), latest.AssetURL, latest.AssetName, exe); err != nil {
+	// Download and extract the update
+	if err := downloadAndReplace(assetURL, exe); err != nil {
 		fmt.Fprintf(os.Stderr, "Error updating: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Successfully updated to v%s\n", latestVersion)
+	fmt.Printf("Successfully updated to %s\n", latestVersion)
 	fmt.Println("\nChangelog: https://github.com/mattmezza/tlgram/blob/main/CHANGELOG.md")
+}
+
+func downloadAndReplace(url, exePath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	// For Windows, we'd need to handle .zip files differently
+	// For now, handle .tar.gz (Linux/macOS)
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("Windows self-update not yet supported, please download manually from GitHub")
+	}
+
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return err
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		// Look for the tlgram binary in the archive
+		if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "tlgram" {
+			// Write to a temporary file first
+			tmpFile := exePath + ".new"
+			f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+			if err != nil {
+				return err
+			}
+
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				os.Remove(tmpFile)
+				return err
+			}
+			f.Close()
+
+			// Replace the old binary
+			if err := os.Rename(tmpFile, exePath); err != nil {
+				os.Remove(tmpFile)
+				return err
+			}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("tlgram binary not found in archive")
 }
